@@ -1,0 +1,63 @@
+# Firestore Database Schema
+
+## Collections
+
+### users
+Document ID: `uid` (from Firebase Auth)
+- email: string
+- role: string ("Owner" | "Manager" | "PumpAttendant" | "Customer")
+- createdAt: timestamp (ISO string)
+
+### prices
+Document ID: `fuelType` (e.g., "petrol", "diesel", "power")
+- rate: number
+- updatedAt: timestamp (ISO string)
+
+### employees
+Document ID: Auto-generated
+- name: string
+- role: string
+- status: string ("Active" | "On Leave" | "Inactive")
+- shortage: number (Total cash shortage amount)
+
+### tanks
+Document ID: `tankId` (e.g., "tank1", "tank2")
+- fuelType: string ("Petrol" | "Diesel")
+- capacity: number (Total capacity in Litres)
+- currentLevel: number (Current volume in Litres)
+- currentDip: number (Dip reading in mm/cm)
+- density: number (Fuel density)
+- updatedAt: timestamp (ISO string)
+
+### nozzles
+Document ID: `nozzleId`
+- nozzleName: string (e.g., "Nozzle 1 - Petrol")
+- linkedTankId: string (Reference to `tanks` document ID)
+- currentMeterReading: number (Last recorded meter reading)
+
+### daily_sales
+Document ID: Auto-generated
+- date: string (YYYY-MM-DD)
+- attendantId: string (Reference to `users` or `employees` ID)
+- nozzleId: string (Reference to `nozzles` ID)
+- startReading: number
+- endReading: number
+- totalLitres: number (endReading - startReading)
+- totalCash: number
+- shiftId: string (e.g., "Morning", "Evening", or specific ID)
+- timestamp: timestamp
+
+### credit_transactions
+Document ID: Auto-generated
+- customerId: string (Reference to `customers` ID)
+- vehicleNumber: string
+- amount: number
+- date: timestamp (ISO string)
+- status: string ("Pending" | "Paid")
+
+### customers
+Document ID: Auto-generated
+- name: string
+- phone: string
+- creditLimit: number
+- outstandingBalance: number

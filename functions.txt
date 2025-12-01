@@ -1,0 +1,65 @@
+PETROL PUMP MANAGEMENT SYSTEM - FUNCTIONAL CAPABILITIES
+
+1. OWNER (ADMIN)
+   - Dashboard Overview: View real-time tank levels, daily sales trends, and employee status.
+   - Price Management: Update daily fuel rates (Petrol, Diesel, Power) which reflect instantly across the app.
+   - Tank Stock Monitoring: Visual liquid gauge for tank levels.
+   - Employee Oversight: Track employee shifts, status (Active/Inactive), and cash shortages.
+   - Role Management: Create/Manage user roles (Manager, Pump Attendant, Customer).
+
+2. MANAGER
+   - Operations Dashboard: Central hub for daily station operations.
+   - Stock & Dip Management:
+     - Record physical tank dip readings.
+     - Auto-calculation of "Book Stock" (Opening Stock - Sales).
+     - Variation Analysis: System highlights stock loss (Red) or gain (Green) based on physical vs. book stock.
+     - Update system stock levels.
+   - Credit Management:
+     - Log credit sales for customers.
+     - Select specific vehicles linked to customers.
+     - Real-time Credit Limit Validation: Blocks transactions if limit is exceeded.
+     - Auto-updates customer outstanding balance.
+
+3. PUMP ATTENDANT (STAFF)
+   - Mobile-First Entry Interface: Simplified, high-contrast UI for easy data entry on the forecourt.
+   - Personalized Header: "Welcome, {Name}" with real-time "Cash in Hand" display.
+   - Shift Management:
+     - Start Job: Select nozzle, enter initial cash float. Previous cash in hand is auto-filled.
+     - Active Job View: Large, clear display of current nozzle, start reading, and start time.
+     - End Job: 
+       - Enter End Reading (Total Litres auto-calculated).
+       - Enter Cash Returned, Cash Online, and Change Given.
+       - System auto-calculates Cash Remaining.
+   - Cash Management:
+     - Lend Cash: Send cash transfer requests to other attendants.
+     - Accept Transfer: Securely accept cash from others. Funds are deducted from sender and added to receiver only upon acceptance.
+     - Real-time Balance: Cash in Hand updates instantly after shifts or transfers.
+   - History & Reporting:
+     - Shift History Calendar: Calendar view of past work days.
+     - Shift Details Popup: View detailed breakdown of any past shift (Time, Sales, Cash Handled, Change).
+   - Voice Commands:
+     - "Reading [number]": Auto-fills the End Reading input field.
+     - "Logout": Voice-activated logout.
+     - "Go Home": Navigation.
+
+4. CUSTOMER
+   - My Credits Portal: Personalized dashboard ("Welcome back, {Name}").
+   - Outstanding Dues: View total amount to be paid and credit limit status.
+   - Vehicle Management:
+     - View Authorized Vehicles (Driver, Model, Fuel Type, Plate).
+     - Add New Vehicle: Modal to add vehicle details including Fuel Type (Petrol/Diesel/CNG).
+     - Search: Filter vehicles by Driver, Model, or Plate.
+   - Payment Requests:
+     - "Pay Now" Button: Initiate payment requests.
+     - Upload Receipt: Attach payment screenshots/receipts.
+     - Select Manager: Choose a manager for verification.
+   - Transaction History:
+     - Detailed table of credit purchases.
+     - Search: Filter transactions by Date, Vehicle, or Amount.
+     - Download Statement: Generate PDF statement (button in table header).
+
+5. GENERAL FEATURES
+   - Role-Based Authentication: Secure login with automatic redirection to role-specific dashboards.
+   - Voice Assistant: Global floating microphone button for voice navigation and commands.
+   - Offline Mode: Visual indicator when internet connection is lost.
+   - Responsive Design: Optimized for Desktop (Owner/Manager) and Mobile (Attendant/Customer).
