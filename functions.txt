@@ -8,11 +8,27 @@ PETROL PUMP MANAGEMENT SYSTEM - FUNCTIONAL CAPABILITIES
    - Role Management: Create/Manage user roles (Manager, Pump Attendant, Customer).
 
 2. MANAGER
-   - Operations Dashboard: Central hub for daily station operations.
+   - Operations Dashboard (Daily Sheet):
+     - Price Management:
+       - Update Petrol/Diesel rates.
+       - Auto-calculate Stock Gain/Loss impact based on current tank levels.
+       - Generate and Download "Price Change Impact Report" (PDF).
+     - Daily Sales Report:
+       - Detailed Nozzle-wise breakdown (Opening/Closing Reading, Sales L, Amount ₹).
+       - Aggregated Total Sales for Petrol and Diesel.
+     - Financial Management:
+       - Track "Payments Received" (Cash, Paytm, PhonePe, Credit).
+       - Track "Expenses" (Shortage, Operational Expenses).
+       - Auto-calculation of Net Collection (Payments - Expenses).
+       - "Save Daily Sheet" to persist financial records.
+   - Attendant Management:
+     - Add New Attendants: Create accounts with Name, Auto ID, and Adhar Number.
+     - Monitor Real-time "Cash in Hand" for each attendant.
+     - View History: Calendar-based access to detailed shift history for any attendant.
    - Stock & Dip Management:
      - Record physical tank dip readings.
      - Auto-calculation of "Book Stock" (Opening Stock - Sales).
-     - Variation Analysis: System highlights stock loss (Red) or gain (Green) based on physical vs. book stock.
+     - Variation Analysis: System highlights stock loss (Red) or gain (Green).
      - Update system stock levels.
    - Credit Management:
      - Log credit sales for customers.
