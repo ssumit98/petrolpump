@@ -98,7 +98,7 @@ export default function StaffEntry() {
         const shiftQuery = query(
             collection(db, "shift_logs"),
             where("attendantId", "==", currentUser.uid),
-            where("status", "==", "Active"),
+            where("status", "in", ["Active", "PendingStartVerification", "PendingEndVerification"]),
             limit(1)
         );
         const shiftUnsub = onSnapshot(shiftQuery, (snapshot) => {
@@ -192,7 +192,8 @@ export default function StaffEntry() {
                     startReading: nozzle.currentMeterReading,
                     cashToHandle: cashToHandle,
                     previousCashInHand: currentDbCash,
-                    status: "Active"
+                    previousCashInHand: currentDbCash,
+                    status: "PendingStartVerification"
                 });
 
                 // 3. Update User Cash in Hand
@@ -237,7 +238,8 @@ export default function StaffEntry() {
                     cashRemaining: cashRemaining,
                     cashOnline: parseFloat(endForm.cashOnline) || 0,
                     change: parseFloat(endForm.change) || 0,
-                    status: "PendingVerification"
+                    change: parseFloat(endForm.change) || 0,
+                    status: "PendingEndVerification"
                 });
 
                 // 2. Update Nozzle Reading
@@ -398,6 +400,74 @@ export default function StaffEntry() {
         }
     }, [lastCommand, showEndModal]);
 
+    // Handle Cancel Start Request
+    const handleCancelStartRequest = async () => {
+        if (!activeShift) return;
+        if (!window.confirm("Are you sure you want to cancel this request?")) return;
+
+        try {
+            await runTransaction(db, async (transaction) => {
+                const shiftRef = doc(db, "shift_logs", activeShift.id);
+                const userRef = doc(db, "users", currentUser.uid);
+
+                // 1. Delete Shift Log
+                transaction.delete(shiftRef);
+
+                // 2. Revert User Cash (subtract cashToHandle)
+                const userDoc = await transaction.get(userRef);
+                if (userDoc.exists()) {
+                    const currentCash = userDoc.data().cashInHand || 0;
+                    const cashToRevert = activeShift.cashToHandle || 0;
+                    transaction.update(userRef, {
+                        cashInHand: currentCash - cashToRevert
+                    });
+                }
+            });
+            setSuccess("Start request cancelled.");
+        } catch (err) {
+            console.error("Error cancelling request:", err);
+            setError("Failed to cancel request.");
+        }
+    };
+
+
+    // Monthly Stats State
+    const [showStatsModal, setShowStatsModal] = useState(false);
+    const [statsMonth, setStatsMonth] = useState(new Date().toISOString().slice(0, 7));
+    const [myMonthlyStats, setMyMonthlyStats] = useState({ totalLitres: 0, totalCash: 0 });
+
+    useEffect(() => {
+        if (showStatsModal) {
+            fetchMyStats();
+        }
+    }, [showStatsModal, statsMonth]);
+
+    const fetchMyStats = async () => {
+        try {
+            const start = `${statsMonth}-01`;
+            const end = `${statsMonth}-31`;
+
+            const q = query(
+                collection(db, "daily_sales"),
+                where("attendantId", "==", currentUser.uid),
+                where("date", ">=", start),
+                where("date", "<=", end)
+            );
+
+            const snapshot = await getDocs(q);
+            let litres = 0;
+            // We can also calculate total cash handled if needed, but request was for fuel.
+            // Let's do litres for now.
+
+            snapshot.docs.forEach(doc => {
+                litres += (doc.data().totalLitres || 0);
+            });
+
+            setMyMonthlyStats({ totalLitres: litres });
+        } catch (err) {
+            console.error("Error fetching stats:", err);
+        }
+    };
 
     if (loading) return <div className="min-h-screen bg-dark-bg text-white flex items-center justify-center">Loading...</div>;
 
@@ -414,6 +484,13 @@ export default function StaffEntry() {
                 </div>
                 <div className="flex items-center gap-2">
                     <button
+                        onClick={() => setShowStatsModal(true)}
+                        className="p-2 bg-gray-800 text-primary-orange rounded-lg hover:bg-gray-700 transition-colors"
+                        title="Monthly Stats"
+                    >
+                        <Calculator size={20} />
+                    </button>
+                    <button
                         onClick={() => setShowLendModal(true)}
                         className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-bold shadow-lg"
                     >
@@ -427,14 +504,14 @@ export default function StaffEntry() {
                         >
                             <Play size={18} /> Start Job
                         </button>
-                    ) : (
+                    ) : activeShift.status === "Active" ? (
                         <button
                             onClick={() => setShowEndModal(true)}
                             className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 font-bold shadow-lg"
                         >
                             <Square size={18} /> End Job
                         </button>
-                    )}
+                    ) : null}
                     <button onClick={logout} className="p-2 bg-red-600/20 text-red-500 rounded-lg hover:bg-red-600/30 transition-colors">
                         <LogOut size={20} />
                     </button>
@@ -475,7 +552,7 @@ export default function StaffEntry() {
             )}
 
             {/* Active Shift Display */}
-            {activeShift ? (
+            {activeShift && activeShift.status === "Active" ? (
                 <div className="bg-card-bg p-6 rounded-xl border border-gray-800 shadow-2xl relative overflow-hidden">
                     <div className="absolute top-0 right-0 p-4 opacity-5">
                         <Clock size={120} />
@@ -499,6 +576,24 @@ export default function StaffEntry() {
                             </div>
                         </div>
                     </div>
+                </div>
+            ) : activeShift && activeShift.status === "PendingStartVerification" ? (
+                <div className="flex flex-col items-center justify-center h-64 text-yellow-500 bg-card-bg rounded-xl border border-yellow-500/30 animate-pulse">
+                    <Clock size={48} className="mb-4" />
+                    <p className="text-lg font-bold">Waiting for Manager Approval</p>
+                    <p className="text-sm text-gray-400 mb-4">Your request to START job is pending.</p>
+                    <button
+                        onClick={handleCancelStartRequest}
+                        className="px-4 py-2 bg-red-600/20 text-red-500 rounded-lg hover:bg-red-600/30 text-sm font-bold flex items-center gap-2"
+                    >
+                        <X size={16} /> Cancel Request
+                    </button>
+                </div>
+            ) : activeShift && activeShift.status === "PendingEndVerification" ? (
+                <div className="flex flex-col items-center justify-center h-64 text-blue-500 bg-card-bg rounded-xl border border-blue-500/30 animate-pulse">
+                    <Clock size={48} className="mb-4" />
+                    <p className="text-lg font-bold">Waiting for Verification</p>
+                    <p className="text-sm text-gray-400">Your request to END job is pending.</p>
                 </div>
             ) : (
                 <div className="flex flex-col items-center justify-center h-64 text-gray-500 bg-card-bg rounded-xl border border-gray-800 border-dashed">
@@ -575,6 +670,39 @@ export default function StaffEntry() {
                                     </div>
                                 ))
                             )}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Stats Modal */}
+            {showStatsModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+                    <div className="bg-card-bg w-full max-w-sm rounded-xl border border-gray-800 shadow-2xl animate-scale-in">
+                        <div className="p-4 border-b border-gray-800 flex justify-between items-center">
+                            <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                                <Calculator size={20} className="text-primary-orange" /> Monthly Stats
+                            </h3>
+                            <button onClick={() => setShowStatsModal(false)} className="text-gray-400 hover:text-white"><X size={20} /></button>
+                        </div>
+                        <div className="p-6 space-y-6">
+                            <div>
+                                <label className="block text-sm text-gray-400 mb-2">Select Month</label>
+                                <input
+                                    type="month"
+                                    value={statsMonth}
+                                    onChange={(e) => setStatsMonth(e.target.value)}
+                                    className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-primary-orange"
+                                />
+                            </div>
+
+                            <div className="bg-gray-800/50 p-6 rounded-xl border border-gray-700 text-center">
+                                <span className="text-gray-400 text-sm block mb-2">Total Fuel Sold</span>
+                                <span className="text-4xl font-mono font-bold text-primary-orange">
+                                    {myMonthlyStats.totalLitres.toFixed(2)}
+                                </span>
+                                <span className="text-gray-500 text-sm ml-2">Litres</span>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -764,3 +892,4 @@ export default function StaffEntry() {
         </div>
     );
 }
+

@@ -40,9 +40,17 @@ export default function AttendantAccounts() {
         autoId: ""
     });
 
+    // Monthly Stats State
+    const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7)); // YYYY-MM
+    const [monthlyStats, setMonthlyStats] = useState({}); // { attendantId: totalLitres }
+
     useEffect(() => {
         fetchAttendants();
     }, []);
+
+    useEffect(() => {
+        fetchMonthlyStats();
+    }, [selectedMonth]);
 
     async function fetchAttendants() {
         try {
@@ -54,6 +62,36 @@ export default function AttendantAccounts() {
             console.error("Error fetching attendants:", err);
         } finally {
             setLoading(false);
+        }
+    }
+
+    async function fetchMonthlyStats() {
+        if (!selectedMonth) return;
+        try {
+            const start = `${selectedMonth}-01`;
+            const end = `${selectedMonth}-31`;
+
+            // Fetch all sales for the month
+            const q = query(
+                collection(db, "daily_sales"),
+                where("date", ">=", start),
+                where("date", "<=", end)
+            );
+
+            const snapshot = await getDocs(q);
+            const stats = {};
+
+            snapshot.docs.forEach(doc => {
+                const data = doc.data();
+                if (!stats[data.attendantId]) {
+                    stats[data.attendantId] = 0;
+                }
+                stats[data.attendantId] += (data.totalLitres || 0);
+            });
+
+            setMonthlyStats(stats);
+        } catch (err) {
+            console.error("Error fetching monthly stats:", err);
         }
     }
 
@@ -163,16 +201,27 @@ export default function AttendantAccounts() {
 
     return (
         <div className="space-y-6 animate-fade-in">
-            <div className="flex justify-between items-center">
+            <div className="flex flex-col md:flex-row justify-between items-center gap-4">
                 <h1 className="text-2xl font-bold text-primary-orange flex items-center gap-2">
                     <UserCircle size={24} /> Attendant Accounts
                 </h1>
-                <button
-                    onClick={() => setShowModal(true)}
-                    className="flex items-center gap-2 px-4 py-2 bg-primary-orange text-white rounded-lg hover:bg-orange-600 transition-colors shadow-lg"
-                >
-                    <Plus size={20} /> Add Attendant
-                </button>
+                <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-2 bg-gray-800 p-2 rounded-lg border border-gray-700">
+                        <span className="text-gray-400 text-sm">Stats for:</span>
+                        <input
+                            type="month"
+                            value={selectedMonth}
+                            onChange={(e) => setSelectedMonth(e.target.value)}
+                            className="bg-transparent text-white font-bold outline-none"
+                        />
+                    </div>
+                    <button
+                        onClick={() => setShowModal(true)}
+                        className="flex items-center gap-2 px-4 py-2 bg-primary-orange text-white rounded-lg hover:bg-orange-600 transition-colors shadow-lg"
+                    >
+                        <Plus size={20} /> Add Attendant
+                    </button>
+                </div>
             </div>
 
             {success && (
@@ -199,6 +248,13 @@ export default function AttendantAccounts() {
                             <div className="flex justify-between items-center text-sm">
                                 <span className="text-gray-400 flex items-center gap-2"><Wallet size={14} /> Cash in Hand</span>
                                 <span className="font-mono font-bold text-green-400">₹{attendant.cashInHand || 0}</span>
+                            </div>
+
+                            <div className="flex justify-between items-center text-sm pt-2 border-t border-gray-800">
+                                <span className="text-gray-400 flex items-center gap-2">Fuel Sold ({new Date(selectedMonth).toLocaleString('default', { month: 'short' })})</span>
+                                <span className="font-mono font-bold text-primary-orange">
+                                    {(monthlyStats[attendant.id] || 0).toFixed(2)} L
+                                </span>
                             </div>
 
                             <button
