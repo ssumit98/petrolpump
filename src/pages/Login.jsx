@@ -19,7 +19,7 @@ export default function Login() {
             if (userRole === "Owner") navigate("/admin/dashboard");
             else if (userRole === "Manager") navigate("/manager/operations");
             else if (userRole === "PumpAttendant") navigate("/staff/entry");
-            else if (userRole === "Customer") navigate("/portal/my-credits");
+            else if (userRole === "Customer" || userRole === "CreditCustomer") navigate("/portal/my-credits");
         }
     }, [currentUser, userRole, navigate]);
 
@@ -40,6 +40,8 @@ export default function Login() {
             setError("Failed to " + (isSignup ? "create account" : "log in") + ": " + err.message);
             setLoading(false);
         }
+        // Note: We don't set loading(false) on success because we want to show "Processing..." 
+        // until the redirect happens. If we set it to false, the form reappears briefly.
     }
 
     return (

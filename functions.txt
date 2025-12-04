@@ -30,11 +30,20 @@ PETROL PUMP MANAGEMENT SYSTEM - FUNCTIONAL CAPABILITIES
      - Auto-calculation of "Book Stock" (Opening Stock - Sales).
      - Variation Analysis: System highlights stock loss (Red) or gain (Green).
      - Update system stock levels.
-   - Credit Management:
-     - Log credit sales for customers.
-     - Select specific vehicles linked to customers.
-     - Real-time Credit Limit Validation: Blocks transactions if limit is exceeded.
-     - Auto-updates customer outstanding balance.
+    - Credit Management:
+      - Log credit sales: Capture vehicle model and fuel type along with plate number.
+      - Recent Transactions:
+        - View history table for selected customer.
+        - Search by vehicle number or amount.
+        - Download PDF Statement.
+      - Payment Verification:
+        - View "Pending Payment Requests" from customers.
+        - Approve Requests: Auto-logs "Payment" transaction and reduces customer balance.
+        - Reject Requests: Updates status to "Rejected".
+        - View uploaded receipts.
+      - Real-time Credit Limit Validation: Blocks transactions if limit is exceeded.
+      - Auto-updates customer outstanding balance.
+      - Add New Customer: Create credit customer accounts with vehicle and credit limit details.
 
 3. PUMP ATTENDANT (STAFF)
    - Mobile-First Entry Interface: Simplified, high-contrast UI for easy data entry on the forecourt.
@@ -65,12 +74,12 @@ PETROL PUMP MANAGEMENT SYSTEM - FUNCTIONAL CAPABILITIES
      - View Authorized Vehicles (Driver, Model, Fuel Type, Plate).
      - Add New Vehicle: Modal to add vehicle details including Fuel Type (Petrol/Diesel/CNG).
      - Search: Filter vehicles by Driver, Model, or Plate.
-   - Payment Requests:
-     - "Pay Now" Button: Initiate payment requests.
-     - Upload Receipt: Attach payment screenshots/receipts.
-     - Select Manager: Choose a manager for verification.
-   - Transaction History:
-     - Detailed table of credit purchases.
+    - Payment Requests:
+      - "Pay Now" Button: Initiate payment requests.
+      - Optional Fields: Transaction ID and Receipt Upload are now optional.
+      - Select Manager: Choose a manager for verification.
+    - Transaction History:
+      - Detailed table of credit purchases (Date, Vehicle Model/Fuel Type, Amount, Status).
      - Search: Filter transactions by Date, Vehicle, or Amount.
      - Download Statement: Generate PDF statement (button in table header).
 

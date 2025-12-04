@@ -64,7 +64,7 @@ function App() {
             <Route
               path="/portal/my-credits"
               element={
-                <ProtectedRoute allowedRoles={["Customer"]}>
+                <ProtectedRoute allowedRoles={["Customer", "CreditCustomer"]}>
                   <CustomerCredits />
                 </ProtectedRoute>
               }

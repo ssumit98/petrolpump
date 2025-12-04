@@ -154,14 +154,17 @@ export default function CustomerCredits() {
 
     const handlePaymentRequest = async (e) => {
         e.preventDefault();
-        if (!customer || !paymentForm.receipt) return;
+        if (!customer) return;
         setUploading(true);
 
         try {
-            // 1. Upload Receipt
-            const fileRef = ref(storage, `receipts/${Date.now()}_${paymentForm.receipt.name}`);
-            await uploadBytes(fileRef, paymentForm.receipt);
-            const receiptUrl = await getDownloadURL(fileRef);
+            // 1. Upload Receipt (Optional)
+            let receiptUrl = null;
+            if (paymentForm.receipt) {
+                const fileRef = ref(storage, `receipts/${Date.now()}_${paymentForm.receipt.name}`);
+                await uploadBytes(fileRef, paymentForm.receipt);
+                receiptUrl = await getDownloadURL(fileRef);
+            }
 
             // 2. Create Payment Request
             await addDoc(collection(db, "payment_requests"), {
@@ -170,8 +173,8 @@ export default function CustomerCredits() {
                 managerId: paymentForm.managerId,
                 amount: parseFloat(paymentForm.amount),
                 mode: paymentForm.mode,
-                transactionId: paymentForm.transactionId,
-                receiptUrl,
+                transactionId: paymentForm.transactionId || "N/A",
+                receiptUrl: receiptUrl || null,
                 status: "Pending",
                 timestamp: serverTimestamp()
             });
@@ -359,7 +362,10 @@ export default function CustomerCredits() {
                                         .map((t) => (
                                             <tr key={t.id} className="hover:bg-gray-800/30 transition-colors">
                                                 <td className="px-4 py-3">{t.date?.toDate ? t.date.toDate().toLocaleDateString() : new Date(t.date).toLocaleDateString()}</td>
-                                                <td className="px-4 py-3 font-mono">{t.vehicleNumber}</td>
+                                                <td className="px-4 py-3">
+                                                    <div className="font-mono text-white">{t.vehicleNumber}</div>
+                                                    <div className="text-xs text-gray-500">{t.vehicleModel || ''} {t.fuelType ? `(${t.fuelType})` : ''}</div>
+                                                </td>
                                                 <td className="px-4 py-3 text-right font-bold text-white">₹{t.amount.toLocaleString()}</td>
                                                 <td className="px-4 py-3 text-center">
                                                     <span className="px-2 py-1 rounded-full text-xs bg-yellow-500/20 text-yellow-500">{t.status}</span>
@@ -480,9 +486,8 @@ export default function CustomerCredits() {
                                 </select>
                             </div>
                             <div>
-                                <label className="block text-sm text-gray-400 mb-1">Transaction ID / Cheque No.</label>
+                                <label className="block text-sm text-gray-400 mb-1">Transaction ID / Cheque No. (Optional)</label>
                                 <input
-                                    required
                                     className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-primary-orange"
                                     value={paymentForm.transactionId}
                                     onChange={e => setPaymentForm({ ...paymentForm, transactionId: e.target.value })}
@@ -490,11 +495,10 @@ export default function CustomerCredits() {
                                 />
                             </div>
                             <div>
-                                <label className="block text-sm text-gray-400 mb-1">Upload Receipt/Screenshot</label>
+                                <label className="block text-sm text-gray-400 mb-1">Upload Receipt/Screenshot (Optional)</label>
                                 <div className="border-2 border-dashed border-gray-700 rounded-lg p-4 text-center hover:border-primary-orange transition-colors cursor-pointer relative">
                                     <input
                                         type="file"
-                                        required
                                         accept="image/*,application/pdf"
                                         className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
                                         onChange={e => setPaymentForm({ ...paymentForm, receipt: e.target.files[0] })}
