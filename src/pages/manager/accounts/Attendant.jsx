@@ -426,8 +426,19 @@ export default function AttendantAccounts() {
                                                     {shift.endTime ? shift.endTime.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Ongoing'}
                                                 </div>
 
-                                                <div className="text-gray-400">Total Sales:</div>
-                                                <div className="text-right font-mono text-white">{shift.totalLitres?.toFixed(2) || 0} L</div>
+                                                <div className="text-gray-400">Net Sales:</div>
+                                                <div className="text-right font-mono text-white">
+                                                    {((shift.totalLitres || 0) - (shift.testingLitres || 0)).toFixed(2)} L
+                                                </div>
+
+                                                {shift.testingLitres > 0 && (
+                                                    <>
+                                                        <div className="text-gray-400 text-yellow-500">Testing:</div>
+                                                        <div className="text-right font-mono text-yellow-500">
+                                                            {shift.testingLitres.toFixed(2)} L
+                                                        </div>
+                                                    </>
+                                                )}
 
                                                 <div className="text-gray-400">Cash Handled:</div>
                                                 <div className="text-right font-mono text-green-400">₹{shift.cashToHandle || 0}</div>

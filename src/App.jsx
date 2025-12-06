@@ -8,6 +8,8 @@ import ManagerStock from "./pages/manager/Stock";
 import ShiftVerification from "./pages/manager/ShiftVerification";
 import CreditAccounts from "./pages/manager/accounts/Credit";
 import AttendantAccounts from "./pages/manager/accounts/Attendant";
+import Sales from "./pages/manager/accounts/Sales";
+import Vendors from "./pages/manager/Vendors";
 import ManagerLayout from "./components/manager/ManagerLayout";
 import StaffEntry from "./pages/staff/Entry";
 import CustomerCredits from "./pages/customer/MyCredits";
@@ -42,7 +44,8 @@ function App() {
                       <Route path="operations" element={<ManagerOperations />} />
                       <Route path="shift-verification" element={<ShiftVerification />} />
                       <Route path="stock" element={<ManagerStock />} />
-                      <Route path="vendors" element={<div className="text-white">Vendor Management Page (Coming Soon)</div>} />
+                      <Route path="vendors" element={<Vendors />} />
+                      <Route path="accounts/sales" element={<Sales />} />
                       <Route path="accounts/credit" element={<CreditAccounts />} />
                       <Route path="accounts/attendant" element={<AttendantAccounts />} />
                       <Route path="*" element={<Navigate to="operations" replace />} />

@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { db, firebaseConfig } from "../../firebase";
-import { collection, getDocs, addDoc, updateDoc, doc, setDoc, serverTimestamp, increment, query, where, orderBy, limit } from "firebase/firestore";
+import { collection, getDocs, addDoc, updateDoc, doc, setDoc, serverTimestamp, increment, query, where, orderBy, limit, getDoc } from "firebase/firestore";
 import { initializeApp, deleteApp } from "firebase/app";
 import { getAuth, createUserWithEmailAndPassword } from "firebase/auth";
 import { User, CreditCard, AlertCircle, CheckCircle, Truck, Plus, X, Save, FileText, Download, Search, Check, XCircle, ExternalLink } from "lucide-react";
@@ -200,7 +200,7 @@ export default function CreditManager() {
                 ...vehicleDetails,
                 amount: parseFloat(amount),
                 date: serverTimestamp(),
-                status: "Pending"
+                status: "Completed" // Changed from Pending to Completed
             });
 
             // 2. Update Customer Balance
@@ -209,7 +209,33 @@ export default function CreditManager() {
                 outstandingBalance: increment(parseFloat(amount))
             });
 
-            // 3. Update Local State
+            // 3. Update Daily Sheet (if exists)
+            const todayStr = new Date().toISOString().split('T')[0];
+            const sheetRef = doc(db, "daily_sheets", todayStr);
+            const sheetDoc = await getDoc(sheetRef);
+
+            if (sheetDoc.exists()) {
+                const sheetData = sheetDoc.data();
+                const updatedPayments = sheetData.payments.map(p => {
+                    if (p.type === "Credit") {
+                        return { ...p, amount: (parseFloat(p.amount) || 0) + parseFloat(amount) };
+                    }
+                    return p;
+                });
+
+                // Recalculate totals
+                const totalPayment = updatedPayments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
+                const netCollection = totalPayment - (sheetData.totalExpense || 0);
+
+                await updateDoc(sheetRef, {
+                    payments: updatedPayments,
+                    totalPayment,
+                    netCollection,
+                    updatedAt: new Date().toISOString()
+                });
+            }
+
+            // 4. Update Local State
             setCustomers(prev => prev.map(c =>
                 c.id === selectedCustomerId
                     ? { ...c, outstandingBalance: c.outstandingBalance + parseFloat(amount) }

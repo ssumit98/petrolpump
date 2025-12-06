@@ -44,7 +44,8 @@ export default function StaffEntry() {
         cashReturned: "",
         cashRemaining: "",
         cashOnline: "",
-        change: ""
+        change: "",
+        testingLitres: "" // Added testingLitres
     });
 
     const [lendForm, setLendForm] = useState({
@@ -224,7 +225,9 @@ export default function StaffEntry() {
                 throw new Error("End reading cannot be less than start reading.");
             }
 
+            const testingLitres = parseFloat(endForm.testingLitres) || 0;
             const totalLitres = endReading - activeShift.startReading;
+            const netLitres = totalLitres - testingLitres; // Calculate net litres
             const cashRemaining = parseFloat(endForm.cashRemaining) || 0;
 
             await runTransaction(db, async (transaction) => {
@@ -234,10 +237,11 @@ export default function StaffEntry() {
                     endTime: serverTimestamp(),
                     endReading: endReading,
                     totalLitres: totalLitres,
+                    netLitres: netLitres, // Save net litres
+                    testingLitres: testingLitres, // Save testing litres
                     cashReturned: parseFloat(endForm.cashReturned) || 0,
                     cashRemaining: cashRemaining,
                     cashOnline: parseFloat(endForm.cashOnline) || 0,
-                    change: parseFloat(endForm.change) || 0,
                     change: parseFloat(endForm.change) || 0,
                     status: "PendingEndVerification"
                 });
@@ -265,14 +269,16 @@ export default function StaffEntry() {
                     fuelType: activeShift.fuelType || "Unknown", // Added fuelType
                     startReading: activeShift.startReading,
                     endReading: endReading,
+                    endReading: endReading,
                     totalLitres: totalLitres,
+                    testingLitres: testingLitres, // Save testing litres
                     timestamp: serverTimestamp(),
                 });
             });
 
             setSuccess("Job ended. Sent for verification.");
             setShowEndModal(false);
-            setEndForm({ endReading: "", cashReturned: "", cashRemaining: "", cashOnline: "", change: "" });
+            setEndForm({ endReading: "", cashReturned: "", cashRemaining: "", cashOnline: "", change: "", testingLitres: "" });
         } catch (err) {
             console.error("Error ending job:", err);
             setError(err.message || "Failed to end job.");
@@ -655,8 +661,19 @@ export default function StaffEntry() {
                                                 {shift.endTime ? shift.endTime.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Ongoing'}
                                             </div>
 
-                                            <div className="text-gray-400">Total Sales:</div>
-                                            <div className="text-right font-mono text-white">{shift.totalLitres?.toFixed(2) || 0} L</div>
+                                            <div className="text-gray-400">Net Sales:</div>
+                                            <div className="text-right font-mono text-white">
+                                                {((shift.totalLitres || 0) - (shift.testingLitres || 0)).toFixed(2)} L
+                                            </div>
+
+                                            {shift.testingLitres > 0 && (
+                                                <>
+                                                    <div className="text-gray-400 text-yellow-500">Testing:</div>
+                                                    <div className="text-right font-mono text-yellow-500">
+                                                        {shift.testingLitres.toFixed(2)} L
+                                                    </div>
+                                                </>
+                                            )}
 
                                             <div className="text-gray-400">Cash Handled:</div>
                                             <div className="text-right font-mono text-green-400">₹{shift.cashToHandle || 0}</div>
@@ -793,6 +810,19 @@ export default function StaffEntry() {
                                     onChange={e => setEndForm({ ...endForm, endReading: e.target.value })}
                                     placeholder="00000.00"
                                 />
+                            </div>
+                            <div>
+                                <label className="block text-sm text-gray-400 mb-1">Testing (Litres)</label>
+                                <input
+                                    type="number"
+                                    step="0.01"
+                                    min="0"
+                                    className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-primary-orange font-mono text-lg"
+                                    value={endForm.testingLitres}
+                                    onChange={e => setEndForm({ ...endForm, testingLitres: e.target.value })}
+                                    placeholder="0.00"
+                                />
+                                <p className="text-xs text-gray-500 mt-1">Fuel pumped for testing (returned to tank)</p>
                             </div>
                             <div className="grid grid-cols-2 gap-4">
                                 <div>

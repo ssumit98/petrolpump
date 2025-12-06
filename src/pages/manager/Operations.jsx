@@ -79,6 +79,30 @@ export default function ManagerOperations() {
                     where("startTime", "<=", endOfDay)
                 );
 
+                // 2. Fetch Credit Transactions
+                const creditQuery = query(
+                    collection(db, "credit_transactions"),
+                    where("date", ">=", startOfDay),
+                    where("date", "<=", endOfDay),
+                    where("status", "==", "Completed")
+                );
+                const creditSnapshot = await getDocs(creditQuery);
+                const creditTotal = creditSnapshot.docs.reduce((sum, doc) => sum + (doc.data().amount || 0), 0);
+
+                // 3. Fetch Vendor Expenses (Paid from Collection)
+                const vendorQuery = query(
+                    collection(db, "vendor_transactions"),
+                    where("date", ">=", startOfDay),
+                    where("date", "<=", endOfDay),
+                    where("paidFromCollection", "==", true)
+                );
+                const vendorSnapshot = await getDocs(vendorQuery);
+                const vendorExpenses = vendorSnapshot.docs.map(doc => ({
+                    type: "Fuel Purchase",
+                    amount: (doc.data().amount || 0) + (doc.data().charges || 0),
+                    notes: `${doc.data().fuelType} Tanker (${doc.data().litres}L)`
+                }));
+
                 const snapshot = await getDocs(shiftsQuery);
                 const shifts = snapshot.docs.map(doc => doc.data());
 
@@ -100,15 +124,18 @@ export default function ManagerOperations() {
                 let autoShortage = 0;
 
                 shifts.forEach(shift => {
-                    const litres = shift.totalLitres || 0;
-                    stats.totalLitres += litres;
+                    const totalLitres = shift.totalLitres || 0;
+                    const testingLitres = shift.testingLitres || 0;
+                    const netLitres = totalLitres - testingLitres; // Calculate Net Litres
+
+                    stats.totalLitres += netLitres;
 
                     // Aggregate Global Stats
                     if (shift.fuelType === "Petrol") {
-                        stats.petrolLitres += litres;
+                        stats.petrolLitres += netLitres;
                     }
                     if (shift.fuelType === "Diesel") {
-                        stats.dieselLitres += litres;
+                        stats.dieselLitres += netLitres;
                     }
 
                     // Aggregate Nozzle Stats
@@ -130,7 +157,11 @@ export default function ManagerOperations() {
                         nozzleMap[shift.nozzleId].closingReading = shift.endReading;
                     }
 
-                    nozzleMap[shift.nozzleId].totalLitres += litres;
+                    if (shift.endReading > nozzleMap[shift.nozzleId].closingReading) {
+                        nozzleMap[shift.nozzleId].closingReading = shift.endReading;
+                    }
+
+                    nozzleMap[shift.nozzleId].totalLitres += netLitres; // Use Net Litres
 
                     // Auto-calc Financials
                     autoCash += (shift.cashReturned || 0);
@@ -166,10 +197,11 @@ export default function ManagerOperations() {
                         { type: "Attendant Cash", amount: autoCash, notes: "Auto-calculated from shifts" },
                         { type: "Paytm", amount: 0, notes: "" },
                         { type: "PhonePe", amount: 0, notes: "" },
-                        { type: "Credit", amount: 0, notes: "" }
+                        { type: "Credit", amount: creditTotal, notes: "Auto-calculated from transactions" }
                     ]);
                     setExpenses([
-                        { type: "Shortage", amount: autoShortage, notes: "Auto-calculated from shifts" }
+                        { type: "Shortage", amount: autoShortage, notes: "Auto-calculated from shifts" },
+                        ...vendorExpenses
                     ]);
                     setSheetDocId(null);
                 }
@@ -585,8 +617,8 @@ export default function ManagerOperations() {
                         <div className="text-center md:text-left">
                             <p className="text-gray-400 text-sm">Net Collection (Payments - Expenses)</p>
                             <h3 className={`text-3xl font-bold font-mono ${(payments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0) -
-                                    expenses.reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0)) >= 0
-                                    ? "text-green-500" : "text-red-500"
+                                expenses.reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0)) >= 0
+                                ? "text-green-500" : "text-red-500"
                                 }`}>
                                 ₹{(
                                     payments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0) -

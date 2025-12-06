@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import {
     LayoutDashboard,
@@ -11,7 +11,8 @@ import {
     X,
     ChevronDown,
     CreditCard,
-    UserCircle
+    UserCircle,
+    TrendingUp
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 
@@ -20,6 +21,19 @@ export default function ManagerNavbar() {
     const location = useLocation();
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
     const [isAccountsOpen, setIsAccountsOpen] = useState(false);
+    const dropdownRef = useRef(null);
+
+    useEffect(() => {
+        function handleClickOutside(event) {
+            if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+                setIsAccountsOpen(false);
+            }
+        }
+        document.addEventListener("mousedown", handleClickOutside);
+        return () => {
+            document.removeEventListener("mousedown", handleClickOutside);
+        };
+    }, [dropdownRef]);
 
     const isActive = (path) => location.pathname === path;
 
@@ -61,7 +75,7 @@ export default function ManagerNavbar() {
                             ))}
 
                             {/* Accounts Dropdown */}
-                            <div className="relative">
+                            <div className="relative" ref={dropdownRef}>
                                 <button
                                     onClick={() => setIsAccountsOpen(!isAccountsOpen)}
                                     className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors
@@ -90,6 +104,13 @@ export default function ManagerNavbar() {
                                             onClick={() => setIsAccountsOpen(false)}
                                         >
                                             <UserCircle size={16} /> Attendant Accounts
+                                        </Link>
+                                        <Link
+                                            to="/manager/accounts/sales"
+                                            className="flex items-center gap-2 px-4 py-2 text-sm text-gray-300 hover:bg-gray-700 hover:text-white"
+                                            onClick={() => setIsAccountsOpen(false)}
+                                        >
+                                            <TrendingUp size={16} /> Sales Account
                                         </Link>
                                     </div>
                                 )}
@@ -157,6 +178,13 @@ export default function ManagerNavbar() {
                             className="flex items-center gap-2 px-3 py-2 rounded-md text-base font-medium text-gray-300 hover:bg-gray-700 hover:text-white block pl-6"
                         >
                             <UserCircle size={18} /> Attendant Accounts
+                        </Link>
+                        <Link
+                            to="/manager/accounts/sales"
+                            onClick={() => setIsMobileMenuOpen(false)}
+                            className="flex items-center gap-2 px-3 py-2 rounded-md text-base font-medium text-gray-300 hover:bg-gray-700 hover:text-white block pl-6"
+                        >
+                            <TrendingUp size={18} /> Sales Account
                         </Link>
 
                         <div className="border-t border-gray-700 mt-4 pt-4">
