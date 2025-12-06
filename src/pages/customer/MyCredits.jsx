@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useAuth } from "../../contexts/AuthContext";
 import { db, storage } from "../../firebase";
-import { collection, query, where, getDocs, orderBy, addDoc, updateDoc, doc, arrayUnion, serverTimestamp } from "firebase/firestore";
+import { collection, query, where, getDocs, orderBy, addDoc, updateDoc, doc, arrayUnion, serverTimestamp, limit, getDoc } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { LogOut, Download, FileText, CreditCard, AlertCircle, Truck, Plus, X, Upload, CheckCircle, Search } from "lucide-react";
 import jsPDF from "jspdf";
@@ -74,25 +74,34 @@ export default function CustomerCredits() {
             if (!currentUser?.email) return;
 
             try {
-                // 1. Fetch Customer
+                // 1. Fetch Customer (Try by UID first)
                 let customerDoc = null;
-                const q = query(collection(db, "customers"), where("email", "==", currentUser.email));
-                const querySnapshot = await getDocs(q);
+                const userRef = doc(db, "customers", currentUser.uid);
+                const userSnap = await getDoc(userRef);
 
-                if (!querySnapshot.empty) {
-                    customerDoc = { id: querySnapshot.docs[0].id, ...querySnapshot.docs[0].data() };
+                if (userSnap.exists()) {
+                    customerDoc = { id: userSnap.id, ...userSnap.data() };
                 } else {
-                    // Fallback for testing
-                    const allCustomers = await getDocs(collection(db, "customers"));
-                    if (!allCustomers.empty) {
-                        customerDoc = { id: allCustomers.docs[0].id, ...allCustomers.docs[0].data() };
+                    // Fallback 1: Try by Email
+                    const q = query(collection(db, "customers"), where("email", "==", currentUser.email));
+                    const querySnapshot = await getDocs(q);
+                    if (!querySnapshot.empty) {
+                        customerDoc = { id: querySnapshot.docs[0].id, ...querySnapshot.docs[0].data() };
+                    } else {
+                        // Fallback 2: Fetch ANY customer (For testing/demo purposes if specific user not found)
+                        // This restores the previous behavior the user was relying on.
+                        console.warn("Specific customer not found. Falling back to first available customer.");
+                        const allCustomers = await getDocs(collection(db, "customers"));
+                        if (!allCustomers.empty) {
+                            customerDoc = { id: allCustomers.docs[0].id, ...allCustomers.docs[0].data() };
+                        }
                     }
                 }
 
                 if (customerDoc) {
                     setCustomer(customerDoc);
 
-                    // 2. Fetch Transactions
+                    // 2. Fetch Transactions (Client-side sort to avoid index issues)
                     const transQuery = query(
                         collection(db, "credit_transactions"),
                         where("customerId", "==", customerDoc.id)
@@ -100,7 +109,7 @@ export default function CustomerCredits() {
                     const transSnapshot = await getDocs(transQuery);
                     const transList = transSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-                    // Sort client-side
+                    // Sort client-side: Newest first
                     transList.sort((a, b) => {
                         const dateA = a.date?.toDate ? a.date.toDate() : new Date(a.date);
                         const dateB = b.date?.toDate ? b.date.toDate() : new Date(b.date);
@@ -343,6 +352,7 @@ export default function CustomerCredits() {
                             <thead className="bg-gray-900/50 uppercase font-medium">
                                 <tr>
                                     <th className="px-4 py-3">Date</th>
+                                    <th className="px-4 py-3">Type</th>
                                     <th className="px-4 py-3">Vehicle</th>
                                     <th className="px-4 py-3 text-right">Amount</th>
                                     <th className="px-4 py-3 text-center">Status</th>
@@ -359,19 +369,29 @@ export default function CustomerCredits() {
                                                 t.vehicleNumber.toLowerCase().includes(search) ||
                                                 t.amount.toString().includes(search);
                                         })
-                                        .map((t) => (
-                                            <tr key={t.id} className="hover:bg-gray-800/30 transition-colors">
-                                                <td className="px-4 py-3">{t.date?.toDate ? t.date.toDate().toLocaleDateString() : new Date(t.date).toLocaleDateString()}</td>
-                                                <td className="px-4 py-3">
-                                                    <div className="font-mono text-white">{t.vehicleNumber}</div>
-                                                    <div className="text-xs text-gray-500">{t.vehicleModel || ''} {t.fuelType ? `(${t.fuelType})` : ''}</div>
-                                                </td>
-                                                <td className="px-4 py-3 text-right font-bold text-white">₹{t.amount.toLocaleString()}</td>
-                                                <td className="px-4 py-3 text-center">
-                                                    <span className="px-2 py-1 rounded-full text-xs bg-yellow-500/20 text-yellow-500">{t.status}</span>
-                                                </td>
-                                            </tr>
-                                        ))
+                                        .map((t) => {
+                                            const isPayment = t.amount < 0;
+                                            return (
+                                                <tr key={t.id} className="hover:bg-gray-800/30 transition-colors">
+                                                    <td className="px-4 py-3">{t.date?.toDate ? t.date.toDate().toLocaleDateString() : new Date(t.date).toLocaleDateString()}</td>
+                                                    <td className="px-4 py-3">
+                                                        <span className={`px-2 py-1 rounded text-xs font-bold ${isPayment ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+                                                            {isPayment ? "PAYMENT" : "FUEL SALE"}
+                                                        </span>
+                                                    </td>
+                                                    <td className="px-4 py-3">
+                                                        <div className="font-mono text-white">{t.vehicleNumber}</div>
+                                                        <div className="text-xs text-gray-500">{t.vehicleModel || ''} {t.fuelType ? `(${t.fuelType})` : ''}</div>
+                                                    </td>
+                                                    <td className={`px-4 py-3 text-right font-bold ${isPayment ? 'text-green-400' : 'text-red-400'}`}>
+                                                        {isPayment ? '-' : '+'}₹{Math.abs(t.amount).toLocaleString()}
+                                                    </td>
+                                                    <td className="px-4 py-3 text-center">
+                                                        <span className="px-2 py-1 rounded-full text-xs bg-yellow-500/20 text-yellow-500">{t.status}</span>
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })
                                 ) : (
                                     <tr><td colSpan="4" className="px-4 py-8 text-center text-gray-500">No transactions found.</td></tr>
                                 )}

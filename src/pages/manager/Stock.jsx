@@ -10,8 +10,7 @@ export default function ManagerStock() {
     const [calculating, setCalculating] = useState(false);
 
     // Stock Data
-    const [openingStock, setOpeningStock] = useState(0);
-    const [salesSinceUpdate, setSalesSinceUpdate] = useState(0);
+    const [openingStock, setOpeningStock] = useState(0); // This is now "Current Book Stock"
     const [physicalStock, setPhysicalStock] = useState("");
 
     const [success, setSuccess] = useState("");
@@ -41,7 +40,6 @@ export default function ManagerStock() {
 
             setCalculating(true);
             setPhysicalStock("");
-            setSalesSinceUpdate(0);
 
             try {
                 const tank = tanks.find(t => t.id === selectedTankId);
@@ -49,20 +47,8 @@ export default function ManagerStock() {
 
                 setOpeningStock(tank.currentLevel);
 
-                // Query sales since last update
-                const lastUpdate = tank.updatedAt ? (tank.updatedAt.toDate ? tank.updatedAt.toDate() : new Date(tank.updatedAt)) : new Date(0);
-
-                const salesQuery = query(
-                    collection(db, "daily_sales"),
-                    where("timestamp", ">", lastUpdate)
-                );
-
-                const snapshot = await getDocs(salesQuery);
-                const totalSales = snapshot.docs
-                    .filter(doc => doc.data().fuelType === tank.fuelType) // Client-side filtering
-                    .reduce((sum, doc) => sum + (doc.data().totalLitres || 0), 0);
-
-                setSalesSinceUpdate(totalSales);
+                setOpeningStock(tank.currentLevel);
+                // No need to calculate sales since update anymore as stock is live updated
 
             } catch (err) {
                 console.error("Error calculating stock:", err);
@@ -75,7 +61,7 @@ export default function ManagerStock() {
         calculateStock();
     }, [selectedTankId, tanks]);
 
-    const bookStock = openingStock - salesSinceUpdate;
+    const bookStock = openingStock; // Live stock from DB
     const variation = physicalStock ? (parseFloat(physicalStock) - bookStock).toFixed(2) : 0;
     const isLoss = parseFloat(variation) < -5; // Threshold of 5 Litres
 
@@ -102,7 +88,8 @@ export default function ManagerStock() {
 
             // Reset form
             setPhysicalStock("");
-            setSalesSinceUpdate(0); // Reset sales since update as we just updated
+            // Reset form
+            setPhysicalStock("");
             setOpeningStock(parseFloat(physicalStock));
 
             setTimeout(() => setSuccess(""), 3000);
@@ -158,19 +145,8 @@ export default function ManagerStock() {
                     {/* Calculation Card */}
                     <div className="bg-gray-900/50 p-6 rounded-xl border border-gray-800 space-y-4">
                         <div className="flex justify-between items-center text-sm">
-                            <span className="text-gray-400">Opening Stock (Last Dip)</span>
+                            <span className="text-gray-400">Current Book Stock</span>
                             <span className="font-mono text-white">{openingStock.toLocaleString()} L</span>
-                        </div>
-                        <div className="flex justify-between items-center text-sm">
-                            <span className="text-gray-400">Sales Since Update</span>
-                            <span className="font-mono text-red-400">-{salesSinceUpdate.toLocaleString()} L</span>
-                        </div>
-                        <div className="h-px bg-gray-700"></div>
-                        <div className="flex justify-between items-center">
-                            <span className="text-gray-300 font-medium">Book Stock (Expected)</span>
-                            <span className="font-mono text-xl font-bold text-blue-400">
-                                {calculating ? "..." : bookStock.toLocaleString()} L
-                            </span>
                         </div>
                     </div>
 

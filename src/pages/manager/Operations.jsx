@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { db } from "../../firebase";
 import { useAuth } from "../../contexts/AuthContext";
-import { collection, getDocs, query, where, orderBy, limit, doc, getDoc, updateDoc, setDoc, serverTimestamp } from "firebase/firestore";
+import { collection, getDocs, query, where, orderBy, limit, doc, getDoc, updateDoc, setDoc, serverTimestamp, runTransaction, increment } from "firebase/firestore";
 import { Calendar as CalendarIcon, DollarSign, Droplets, TrendingUp, Save, FileText, Plus, Trash2, TrendingDown, Edit, X } from "lucide-react";
 import Calendar from "../../components/common/Calendar";
 import jsPDF from "jspdf";
@@ -65,7 +65,11 @@ export default function ManagerOperations() {
         async function fetchDailyStats() {
             setLoading(true);
             try {
-                const dateStr = selectedDate.toISOString().split('T')[0];
+                // Fix: Use local date for dateStr to avoid timezone issues with toISOString()
+                const offset = selectedDate.getTimezoneOffset();
+                const localDate = new Date(selectedDate.getTime() - (offset * 60 * 1000));
+                const dateStr = localDate.toISOString().split('T')[0];
+
                 const startOfDay = new Date(selectedDate);
                 startOfDay.setHours(0, 0, 0, 0);
 
@@ -97,11 +101,30 @@ export default function ManagerOperations() {
                     where("paidFromCollection", "==", true)
                 );
                 const vendorSnapshot = await getDocs(vendorQuery);
-                const vendorExpenses = vendorSnapshot.docs.map(doc => ({
-                    type: "Fuel Purchase",
-                    amount: (doc.data().amount || 0) + (doc.data().charges || 0),
-                    notes: `${doc.data().fuelType} Tanker (${doc.data().litres}L)`
-                }));
+                const vendorExpenses = vendorSnapshot.docs.map(doc => {
+                    const data = doc.data();
+                    // Check if new schema (has fuelPaymentMode)
+                    const isNewSchema = data.fuelPaymentMode !== undefined;
+
+                    if (isNewSchema) {
+                        // New Logic: paidFromCollection flag ONLY applies to Tanker Charges
+                        // Fuel Amount is handled separately (Bank)
+                        return {
+                            type: "Tanker Charges",
+                            amount: (data.charges || 0),
+                            notes: `${data.fuelType} Tanker Charges (${data.litres}L) - ${data.transactionId || ''}`,
+                            mode: data.chargesPaymentMode || "Cash"
+                        };
+                    } else {
+                        // Old Logic: Backward compatibility
+                        return {
+                            type: "Fuel Purchase",
+                            amount: (data.amount || 0) + (data.charges || 0),
+                            notes: `${data.fuelType} Tanker (${data.litres}L)`,
+                            mode: "Cash"
+                        };
+                    }
+                });
 
                 const snapshot = await getDocs(shiftsQuery);
                 const shifts = snapshot.docs.map(doc => doc.data());
@@ -189,7 +212,8 @@ export default function ManagerOperations() {
                 if (sheetDoc.exists()) {
                     const data = sheetDoc.data();
                     setPayments(data.payments || []);
-                    setExpenses(data.expenses || []);
+                    // Ensure existing expenses have a mode, default to 'Cash' if missing
+                    setExpenses((data.expenses || []).map(e => ({ ...e, mode: e.mode || "Cash" })));
                     setSheetDocId(dateStr);
                 } else {
                     // Auto-populate if new
@@ -200,7 +224,7 @@ export default function ManagerOperations() {
                         { type: "Credit", amount: creditTotal, notes: "Auto-calculated from transactions" }
                     ]);
                     setExpenses([
-                        { type: "Shortage", amount: autoShortage, notes: "Auto-calculated from shifts" },
+                        { type: "Shortage", amount: autoShortage, notes: "Auto-calculated from shifts", mode: "Non-Cash" },
                         ...vendorExpenses
                     ]);
                     setSheetDocId(null);
@@ -220,9 +244,26 @@ export default function ManagerOperations() {
         setSavingSheet(true);
         setPriceMessage("");
         try {
-            const dateStr = selectedDate.toISOString().split('T')[0];
+            // Fix: Use local date for dateStr
+            const offset = selectedDate.getTimezoneOffset();
+            const localDate = new Date(selectedDate.getTime() - (offset * 60 * 1000));
+            const dateStr = localDate.toISOString().split('T')[0];
+
             const totalPayment = payments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
             const totalExpense = expenses.reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0);
+
+            // Calculate Cash Component specifically
+            // Assuming "Attendant Cash" is the only cash inflow in payments
+            const cashPayment = payments.find(p => p.type === "Attendant Cash")?.amount || 0;
+
+            // Exclude "Shortage" from cash expenses as it's a loss, not a cash outflow from the collected amount
+            // The "Attendant Cash" is already net of shortage (it's what was actually handed over)
+            // Only deduct expenses that were paid in CASH
+            const cashExpense = expenses
+                .filter(e => (e.mode === "Cash" || !e.mode) && e.type !== "Shortage")
+                .reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0);
+
+            const currentNetCash = parseFloat(cashPayment) - parseFloat(cashExpense);
 
             const sheetData = {
                 date: dateStr,
@@ -231,13 +272,78 @@ export default function ManagerOperations() {
                 totalPayment,
                 totalExpense,
                 netCollection: totalPayment - totalExpense,
+                petrolLitres: dailyStats.petrolLitres || 0,
+                dieselLitres: dailyStats.dieselLitres || 0,
                 updatedAt: new Date().toISOString(),
                 updatedBy: currentUser.uid
             };
 
-            await setDoc(doc(db, "daily_sheets", dateStr), sheetData);
+            await runTransaction(db, async (transaction) => {
+                const sheetRef = doc(db, "daily_sheets", dateStr);
+                const userRef = doc(db, "users", currentUser.uid);
+
+                // Fetch Prices/Tanks to decrement stock
+                const tanksSnapshot = await getDocs(collection(db, "tanks")); // Optimally should query, but OK for now
+                const tanks = tanksSnapshot.docs.map(t => ({ id: t.id, ...t.data() }));
+
+                // Assuming one tank per fuel type for simplicity, or we decrement the first one found
+                const petrolTank = tanks.find(t => t.fuelType === "Petrol");
+                const dieselTank = tanks.find(t => t.fuelType === "Diesel");
+
+                const sheetDoc = await transaction.get(sheetRef);
+                let previousNetCash = 0;
+                let prevPetrolLitres = 0;
+                let prevDieselLitres = 0;
+
+                if (sheetDoc.exists()) {
+                    const data = sheetDoc.data();
+                    // We need to reconstruct what was the cash component of the previous save
+                    const prevPayments = data.payments || [];
+                    const prevExpenses = data.expenses || [];
+
+                    const prevCashPayment = prevPayments.find(p => p.type === "Attendant Cash")?.amount || 0;
+
+                    // Same logic for previous sheet: exclude Shortage AND check mode
+                    const prevCashExpense = prevExpenses
+                        .filter(e => e.type !== "Shortage" && (e.mode === "Cash" || !e.mode))
+                        .reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0);
+
+                    previousNetCash = parseFloat(prevCashPayment) - parseFloat(prevCashExpense);
+
+                    // Previous Litres
+                    prevPetrolLitres = data.petrolLitres || 0;
+                    prevDieselLitres = data.dieselLitres || 0;
+                }
+
+                const diff = currentNetCash - previousNetCash;
+                const petrolDiff = (dailyStats.petrolLitres || 0) - prevPetrolLitres;
+                const dieselDiff = (dailyStats.dieselLitres || 0) - prevDieselLitres;
+
+                // 1. Save/Update Sheet
+                transaction.set(sheetRef, sheetData);
+
+                // 2. Update User Cash
+                if (diff !== 0) {
+                    transaction.update(userRef, {
+                        cashInHand: increment(diff)
+                    });
+                }
+
+                // 3. Update Fuel Stock (Decrement)
+                if (petrolDiff !== 0 && petrolTank) {
+                    transaction.update(doc(db, "tanks", petrolTank.id), {
+                        currentLevel: increment(-petrolDiff)
+                    });
+                }
+                if (dieselDiff !== 0 && dieselTank) {
+                    transaction.update(doc(db, "tanks", dieselTank.id), {
+                        currentLevel: increment(-dieselDiff)
+                    });
+                }
+            });
+
             setSheetDocId(dateStr);
-            setPriceMessage("Daily Sheet saved successfully!");
+            setPriceMessage("Daily Sheet saved, Cash & Stock updated!");
             setTimeout(() => setPriceMessage(""), 3000);
         } catch (err) {
             console.error("Error saving sheet:", err);
@@ -586,6 +692,7 @@ export default function ManagerOperations() {
                                         <tr className="border-b border-gray-700 text-gray-400 text-xs">
                                             <th className="py-2 px-2">Type</th>
                                             <th className="py-2 px-2 text-right">Amount (₹)</th>
+                                            <th className="py-2 px-2">Mode</th>
                                             <th className="py-2 px-2">Notes</th>
                                         </tr>
                                     </thead>
@@ -596,7 +703,11 @@ export default function ManagerOperations() {
                                                 <td className="py-2 px-2 text-right font-mono text-red-400">
                                                     {row.amount ? `₹${parseFloat(row.amount).toFixed(2)}` : '-'}
                                                 </td>
-                                                <td className="py-2 px-2 text-gray-400 text-xs">{row.notes}</td>
+                                                <td className="py-2 px-2 text-gray-400 text-xs">
+                                                    <span className={`px-2 py-0.5 rounded text-[10px] ${row.mode === 'Cash' || !row.mode ? 'bg-green-500/20 text-green-400' : row.mode === 'Bank' ? 'bg-blue-500/20 text-blue-400' : 'bg-gray-700 text-gray-400'}`}>
+                                                        {row.mode || 'Cash'}
+                                                    </span>
+                                                </td>
                                             </tr>
                                         ))}
                                         <tr className="bg-gray-900/50 font-bold">
@@ -660,6 +771,7 @@ export default function ManagerOperations() {
                                     <tr className="border-b border-gray-700 text-gray-400 text-xs">
                                         <th className="py-2 px-2">Type</th>
                                         <th className="py-2 px-2 text-right">Amount (₹)</th>
+                                        {!showPaymentModal && <th className="py-2 px-2">Mode</th>}
                                         <th className="py-2 px-2">Notes</th>
                                         <th className="py-2 px-2 w-8"></th>
                                     </tr>
@@ -693,6 +805,25 @@ export default function ManagerOperations() {
                                                     placeholder="0.00"
                                                 />
                                             </td>
+
+                                            {!showPaymentModal && (
+                                                <td className="py-2 px-2">
+                                                    <select
+                                                        value={row.mode || "Cash"}
+                                                        onChange={(e) => {
+                                                            const newData = [...tempExpenses];
+                                                            newData[index].mode = e.target.value;
+                                                            setTempExpenses(newData);
+                                                        }}
+                                                        className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-white text-xs focus:ring-1 focus:ring-primary-orange"
+                                                    >
+                                                        <option value="Cash">Cash</option>
+                                                        <option value="Bank">Bank/Online</option>
+                                                        <option value="Non-Cash">Non-Cash</option>
+                                                    </select>
+                                                </td>
+                                            )}
+
                                             <td className="py-2 px-2">
                                                 <input
                                                     type="text"
@@ -725,7 +856,7 @@ export default function ManagerOperations() {
                             <button
                                 onClick={() => {
                                     const newData = showPaymentModal ? [...tempPayments] : [...tempExpenses];
-                                    newData.push({ type: "", amount: "", notes: "" });
+                                    newData.push({ type: "", amount: "", notes: "", mode: "Cash" });
                                     showPaymentModal ? setTempPayments(newData) : setTempExpenses(newData);
                                 }}
                                 className="mt-4 text-sm bg-gray-800 hover:bg-gray-700 px-3 py-2 rounded text-white flex items-center gap-2 w-full justify-center border border-gray-700 border-dashed"

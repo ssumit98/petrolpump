@@ -54,7 +54,14 @@ export function AuthProvider({ children }) {
                 const docRef = doc(db, "users", user.uid);
                 const docSnap = await getDoc(docRef);
                 if (docSnap.exists()) {
-                    setUserRole(docSnap.data().role);
+                    const data = docSnap.data();
+                    if (data.disabled) {
+                        await signOut(auth);
+                        setCurrentUser(null);
+                        setUserRole(null);
+                    } else {
+                        setUserRole(data.role);
+                    }
                 } else {
                     setUserRole(null); // Or handle as error
                 }

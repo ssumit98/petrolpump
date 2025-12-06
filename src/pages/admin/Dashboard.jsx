@@ -9,21 +9,7 @@ export default function OwnerDashboard() {
     const { logout, currentUser } = useAuth();
 
     return (
-        <div className="min-h-screen bg-dark-bg text-white p-8">
-            <div className="flex justify-between items-center mb-8">
-                <div>
-                    <h1 className="text-3xl font-bold text-primary-orange">Owner Dashboard</h1>
-                    <p className="text-gray-400 mt-1">Welcome back, {currentUser?.email}</p>
-                </div>
-                <button
-                    onClick={logout}
-                    className="flex items-center gap-2 px-4 py-2 bg-red-600/20 text-red-500 rounded-lg hover:bg-red-600/30 transition-colors"
-                >
-                    <LogOut size={18} />
-                    Logout
-                </button>
-            </div>
-
+        <div className="space-y-6 animate-fade-in">
             {/* Price Management Section */}
             <section className="mb-8">
                 <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">

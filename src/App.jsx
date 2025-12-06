@@ -3,6 +3,9 @@ import { AuthProvider } from "./contexts/AuthContext";
 import ProtectedRoute from "./components/ProtectedRoute";
 import Login from "./pages/Login";
 import OwnerDashboard from "./pages/admin/Dashboard";
+import AdminLayout from "./components/admin/AdminLayout";
+import AdminAccounts from "./pages/admin/Accounts";
+import AdminReports from "./pages/admin/Reports";
 import ManagerOperations from "./pages/manager/Operations";
 import ManagerStock from "./pages/manager/Stock";
 import ShiftVerification from "./pages/manager/ShiftVerification";
@@ -27,10 +30,17 @@ function App() {
             <Route path="/login" element={<Login />} />
 
             <Route
-              path="/admin/dashboard"
+              path="/admin/*"
               element={
                 <ProtectedRoute allowedRoles={["Owner"]}>
-                  <OwnerDashboard />
+                  <AdminLayout>
+                    <Routes>
+                      <Route path="dashboard" element={<OwnerDashboard />} />
+                      <Route path="reports" element={<AdminReports />} />
+                      <Route path="accounts" element={<AdminAccounts />} />
+                      <Route path="*" element={<Navigate to="dashboard" replace />} />
+                    </Routes>
+                  </AdminLayout>
                 </ProtectedRoute>
               }
             />

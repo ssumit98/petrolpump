@@ -1,20 +1,12 @@
 import { useState, useEffect } from "react";
-import { db } from "../../../firebase";
+import { db, firebaseConfig } from "../../../firebase";
 import { collection, query, where, getDocs, doc, setDoc, serverTimestamp, orderBy, limit } from "firebase/firestore";
 import { initializeApp, deleteApp } from "firebase/app";
 import { getAuth, createUserWithEmailAndPassword } from "firebase/auth";
 import { UserCircle, Wallet, History, Plus, X, Save, UserPlus, Clock, Calendar as CalendarIcon } from "lucide-react";
 import Calendar from "../../../components/common/Calendar";
 
-// Firebase Config for Secondary App (to create user without logging out)
-const firebaseConfig = {
-    apiKey: "AIzaSyDw7ZnYYFek8VOUoEiJib3u9-3wGGfk_x8",
-    authDomain: "petrol-pump-bee6c.firebaseapp.com",
-    projectId: "petrol-pump-bee6c",
-    storageBucket: "petrol-pump-bee6c.firebasestorage.app",
-    messagingSenderId: "203389907240",
-    appId: "1:203389907240:web:2fba2503e31919f4a0201d"
-};
+
 
 export default function AttendantAccounts() {
     const [attendants, setAttendants] = useState([]);

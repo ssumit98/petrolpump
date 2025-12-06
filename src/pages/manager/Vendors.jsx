@@ -1,7 +1,9 @@
 import { useState, useEffect } from "react";
 import { db } from "../../firebase";
 import { collection, getDocs, addDoc, updateDoc, doc, getDoc, serverTimestamp, query, orderBy, limit, increment } from "firebase/firestore";
-import { Truck, Plus, X, Save, AlertCircle, CheckCircle, Droplets, Calendar } from "lucide-react";
+import { Truck, Droplets, Plus, X, Calendar, DollarSign, AlertCircle, Save, CheckCircle } from "lucide-react";
+import usePagination from "../../hooks/usePagination";
+import PaginationControls from "../../components/common/PaginationControls";
 
 export default function Vendors() {
     const [transactions, setTransactions] = useState([]);
@@ -11,12 +13,23 @@ export default function Vendors() {
     const [error, setError] = useState("");
     const [success, setSuccess] = useState("");
 
+    const {
+        currentData: currentTransactions,
+        currentPage,
+        totalPages,
+        nextPage,
+        prevPage,
+        hasPages
+    } = usePagination(transactions, 10);
+
     const [formData, setFormData] = useState({
         fuelType: "Petrol",
         litres: "",
         amount: "",
         charges: "",
-        paymentMode: "Cash",
+        fuelPaymentMode: "Bank",
+        chargesPaymentMode: "Cash",
+        fuelPaymentDate: new Date().toISOString().split('T')[0],
         transactionId: "",
         paidFromCollection: false
     });
@@ -71,7 +84,10 @@ export default function Vendors() {
                 litres: litres,
                 amount: amount,
                 charges: charges,
-                paymentMode: formData.paymentMode,
+                fuelPaymentMode: formData.fuelPaymentMode,
+                chargesPaymentMode: formData.chargesPaymentMode,
+                fuelPaymentDate: formData.fuelPaymentDate, // specific date for fuel payment
+                // overall date is still used for sorting/logging time
                 transactionId: formData.transactionId,
                 paidFromCollection: formData.paidFromCollection,
                 date: serverTimestamp(),
@@ -105,10 +121,15 @@ export default function Vendors() {
 
                 if (sheetDoc.exists()) {
                     const sheetData = sheetDoc.data();
+                    // Logic Change: If paidFromCollection, ONLY add Tanker Charges as expense
+                    // Fuel Amount is assumed to be paid via Bank/Credit separately (not from daily cash)
+                    const expenseAmount = charges;
+
                     const newExpense = {
-                        type: "Fuel Purchase",
-                        amount: amount + charges,
-                        notes: `${formData.fuelType} Tanker Entry (${litres}L)`
+                        type: "Tanker Charges", // Changed from "Fuel Purchase" to be more specific
+                        amount: expenseAmount,
+                        notes: `${formData.fuelType} Tanker Charges (${litres}L) - ${formData.transactionId || ''}`,
+                        mode: formData.chargesPaymentMode || "Cash"
                     };
 
                     const updatedExpenses = [...(sheetData.expenses || []), newExpense];
@@ -131,7 +152,9 @@ export default function Vendors() {
                 litres: "",
                 amount: "",
                 charges: "",
-                paymentMode: "Cash",
+                fuelPaymentMode: "Bank",
+                chargesPaymentMode: "Cash",
+                fuelPaymentDate: new Date().toISOString().split('T')[0],
                 transactionId: "",
                 paidFromCollection: false
             });
@@ -178,9 +201,9 @@ export default function Vendors() {
                                 <th className="px-4 py-3">Date</th>
                                 <th className="px-4 py-3">Fuel Type</th>
                                 <th className="px-4 py-3 text-right">Litres</th>
-                                <th className="px-4 py-3 text-right">Amount (₹)</th>
+                                <th className="px-4 py-3 text-right">Fuel Amt (₹)</th>
                                 <th className="px-4 py-3 text-right">Charges (₹)</th>
-                                <th className="px-4 py-3">Payment</th>
+                                <th className="px-4 py-3">Modes</th>
                                 <th className="px-4 py-3 text-center">Paid from Pump?</th>
                             </tr>
                         </thead>
@@ -190,7 +213,7 @@ export default function Vendors() {
                             ) : transactions.length === 0 ? (
                                 <tr><td colSpan="7" className="px-4 py-8 text-center text-gray-500">No entries found.</td></tr>
                             ) : (
-                                transactions.map(t => (
+                                currentTransactions.map(t => (
                                     <tr key={t.id} className="hover:bg-gray-800/30 transition-colors">
                                         <td className="px-4 py-3">
                                             {t.date?.toDate ? t.date.toDate().toLocaleDateString() : new Date().toLocaleDateString()}
@@ -207,8 +230,9 @@ export default function Vendors() {
                                         <td className="px-4 py-3 text-right font-mono font-bold text-white">₹{t.amount.toLocaleString()}</td>
                                         <td className="px-4 py-3 text-right font-mono text-gray-400">₹{t.charges.toLocaleString()}</td>
                                         <td className="px-4 py-3">
-                                            <div className="text-white">{t.paymentMode}</div>
-                                            <div className="text-xs text-gray-500 font-mono">{t.transactionId || '-'}</div>
+                                            <div className="text-xs text-white">Fuel: <span className="text-gray-400">{t.fuelPaymentMode || t.paymentMode}</span></div>
+                                            <div className="text-xs text-white">Chg: <span className="text-gray-400">{t.chargesPaymentMode || '-'}</span></div>
+                                            <div className="text-[10px] text-gray-500 font-mono mt-1">{t.transactionId || '-'}</div>
                                         </td>
                                         <td className="px-4 py-3 text-center">
                                             {t.paidFromCollection ? (
@@ -223,6 +247,13 @@ export default function Vendors() {
                         </tbody>
                     </table>
                 </div>
+                <PaginationControls
+                    currentPage={currentPage}
+                    totalPages={totalPages}
+                    onNext={nextPage}
+                    onPrev={prevPage}
+                    hasPages={hasPages}
+                />
             </div>
 
             {/* Log Entry Modal */}
@@ -287,19 +318,44 @@ export default function Vendors() {
                                         />
                                     </div>
                                 </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-400 mb-1">Fuel Amount (₹)</label>
-                                    <input
-                                        type="number"
-                                        name="amount"
-                                        required
-                                        min="0"
-                                        step="0.01"
-                                        className="w-full px-4 py-3 bg-gray-900 border border-gray-700 rounded-lg focus:ring-2 focus:ring-primary-orange text-white font-mono text-lg"
-                                        placeholder="0.00"
-                                        value={formData.amount}
-                                        onChange={handleInputChange}
-                                    />
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-400 mb-1">Fuel Amount (₹)</label>
+                                        <input
+                                            type="number"
+                                            name="amount"
+                                            required
+                                            min="0"
+                                            step="0.01"
+                                            className="w-full px-4 py-3 bg-gray-900 border border-gray-700 rounded-lg focus:ring-2 focus:ring-primary-orange text-white font-mono text-lg"
+                                            placeholder="0.00"
+                                            value={formData.amount}
+                                            onChange={handleInputChange}
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-400 mb-1">Fuel Payment Mode</label>
+                                        <select
+                                            name="fuelPaymentMode"
+                                            className="w-full px-4 py-3 bg-gray-900 border border-gray-700 rounded-lg focus:ring-2 focus:ring-primary-orange text-white mb-2"
+                                            value={formData.fuelPaymentMode}
+                                            onChange={handleInputChange}
+                                        >
+                                            <option value="Bank">Bank Transfer</option>
+                                            <option value="Cheque">Cheque</option>
+                                            <option value="Credit">Credit (Pay Later)</option>
+                                            <option value="Cash">Cash</option>
+                                        </select>
+
+                                        <label className="block text-xs font-medium text-gray-500 mb-1">Payment Date</label>
+                                        <input
+                                            type="date"
+                                            name="fuelPaymentDate"
+                                            value={formData.fuelPaymentDate}
+                                            onChange={handleInputChange}
+                                            className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm"
+                                        />
+                                    </div>
                                 </div>
                             </div>
 
@@ -318,19 +374,33 @@ export default function Vendors() {
                                     />
                                 </div>
                                 <div>
-                                    <label className="block text-sm font-medium text-gray-400 mb-1">Payment Mode</label>
+                                    <label className="block text-sm font-medium text-gray-400 mb-1">Charges Payment Mode</label>
                                     <select
-                                        name="paymentMode"
+                                        name="chargesPaymentMode"
                                         className="w-full px-4 py-3 bg-gray-900 border border-gray-700 rounded-lg focus:ring-2 focus:ring-primary-orange text-white"
-                                        value={formData.paymentMode}
+                                        value={formData.chargesPaymentMode}
                                         onChange={handleInputChange}
                                     >
                                         <option value="Cash">Cash</option>
                                         <option value="Online">Online Transfer</option>
-                                        <option value="Cheque">Cheque</option>
-                                        <option value="Credit">Credit (Pay Later)</option>
+                                        <option value="Bank">Bank Account</option>
                                     </select>
                                 </div>
+                            </div>
+
+                            <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-800 flex items-center gap-3">
+                                <input
+                                    type="checkbox"
+                                    id="paidFromCollection"
+                                    name="paidFromCollection"
+                                    checked={formData.paidFromCollection}
+                                    onChange={handleInputChange}
+                                    className="w-5 h-5 rounded border-gray-600 text-primary-orange focus:ring-primary-orange bg-gray-800"
+                                />
+                                <label htmlFor="paidFromCollection" className="text-sm text-gray-300 cursor-pointer select-none">
+                                    <span className="font-bold block text-white">Charges Paid from Daily Collection?</span>
+                                    <span className="text-xs text-gray-500">If checked, ONLY Tanker Charges ({formData.charges || 0}) will be added as expense.</span>
+                                </label>
                             </div>
 
                             <div>
@@ -345,21 +415,6 @@ export default function Vendors() {
                                 />
                             </div>
 
-                            <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-800 flex items-center gap-3">
-                                <input
-                                    type="checkbox"
-                                    id="paidFromCollection"
-                                    name="paidFromCollection"
-                                    checked={formData.paidFromCollection}
-                                    onChange={handleInputChange}
-                                    className="w-5 h-5 rounded border-gray-600 text-primary-orange focus:ring-primary-orange bg-gray-800"
-                                />
-                                <label htmlFor="paidFromCollection" className="text-sm text-gray-300 cursor-pointer select-none">
-                                    <span className="font-bold block text-white">Paid from Daily Collection?</span>
-                                    <span className="text-xs text-gray-500">If checked, this will be added as an expense in today's sheet.</span>
-                                </label>
-                            </div>
-
                             <button
                                 type="submit"
                                 disabled={submitting}
@@ -369,8 +424,9 @@ export default function Vendors() {
                             </button>
                         </form>
                     </div>
-                </div>
-            )}
-        </div>
+                </div >
+            )
+            }
+        </div >
     );
 }

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { db, firebaseConfig } from "../../firebase";
 import { collection, getDocs, addDoc, updateDoc, doc, setDoc, serverTimestamp, increment, query, where, orderBy, limit, getDoc } from "firebase/firestore";
 import { initializeApp, deleteApp } from "firebase/app";
@@ -6,6 +6,8 @@ import { getAuth, createUserWithEmailAndPassword } from "firebase/auth";
 import { User, CreditCard, AlertCircle, CheckCircle, Truck, Plus, X, Save, FileText, Download, Search, Check, XCircle, ExternalLink } from "lucide-react";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
+import usePagination from "../../hooks/usePagination";
+import PaginationControls from "../../components/common/PaginationControls";
 
 export default function CreditManager() {
     const [customers, setCustomers] = useState([]);
@@ -123,6 +125,13 @@ export default function CreditManager() {
                 outstandingBalance: increment(-parseFloat(request.amount))
             });
 
+            // 4. Update Manager Cash if Cash Payment
+            if (request.mode === "Cash") {
+                await updateDoc(doc(db, "users", currentUser.uid), {
+                    cashInHand: increment(parseFloat(request.amount))
+                });
+            }
+
             setSuccess("Payment approved successfully!");
             fetchPaymentRequests();
             fetchCustomers(); // Refresh balances
@@ -154,6 +163,30 @@ export default function CreditManager() {
     }
 
     const selectedCustomer = customers.find(c => c.id === selectedCustomerId);
+
+    // Filter Transactions Logic (Memoized for Pagination)
+    const filteredTransactions = useMemo(() => {
+        if (!transactions.length) return [];
+        return transactions.filter(t => {
+            if (!transactionSearch) return true;
+            const search = transactionSearch.toLowerCase();
+            const date = t.date?.toDate ? t.date.toDate().toLocaleDateString() : new Date(t.date).toLocaleDateString();
+            return date.toLowerCase().includes(search) ||
+                t.vehicleNumber.toLowerCase().includes(search) ||
+                t.amount.toString().includes(search);
+        });
+    }, [transactions, transactionSearch]);
+
+    // Pagination
+    const {
+        currentData: currentTransactions,
+        currentPage,
+        totalPages,
+        nextPage,
+        prevPage,
+        hasPages
+    } = usePagination(filteredTransactions, 10);
+
     const currentBalance = selectedCustomer ? (selectedCustomer.outstandingBalance || 0) : 0;
     const creditLimit = selectedCustomer ? (selectedCustomer.creditLimit || 0) : 0;
     const newBalance = currentBalance + (parseFloat(amount) || 0);
@@ -567,166 +600,166 @@ export default function CreditManager() {
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-gray-800">
-                                {transactions.length > 0 ? (
-                                    transactions
-                                        .filter(t => {
-                                            if (!transactionSearch) return true;
-                                            const search = transactionSearch.toLowerCase();
-                                            const date = t.date?.toDate ? t.date.toDate().toLocaleDateString() : new Date(t.date).toLocaleDateString();
-                                            return date.toLowerCase().includes(search) ||
-                                                t.vehicleNumber.toLowerCase().includes(search) ||
-                                                t.amount.toString().includes(search);
-                                        })
-                                        .map((t) => (
-                                            <tr key={t.id} className="hover:bg-gray-800/30 transition-colors">
-                                                <td className="px-4 py-3">{t.date?.toDate ? t.date.toDate().toLocaleDateString() : new Date(t.date).toLocaleDateString()}</td>
-                                                <td className="px-4 py-3">
-                                                    <div className="font-mono text-white">{t.vehicleNumber}</div>
-                                                    <div className="text-xs text-gray-500">{t.vehicleModel} ({t.fuelType})</div>
-                                                </td>
-                                                <td className="px-4 py-3 text-right font-bold text-white">₹{t.amount.toLocaleString()}</td>
-                                                <td className="px-4 py-3 text-center">
-                                                    <span className="px-2 py-1 rounded-full text-xs bg-yellow-500/20 text-yellow-500">{t.status}</span>
-                                                </td>
-                                            </tr>
-                                        ))
+                                {currentTransactions.length > 0 ? (
+                                    currentTransactions.map((t) => (
+                                        <tr key={t.id} className="hover:bg-gray-800/30 transition-colors">
+                                            <td className="px-4 py-3">{t.date?.toDate ? t.date.toDate().toLocaleDateString() : new Date(t.date).toLocaleDateString()}</td>
+                                            <td className="px-4 py-3">
+                                                <div className="font-mono text-white">{t.vehicleNumber}</div>
+                                                <div className="text-xs text-gray-500">{t.vehicleModel} ({t.fuelType})</div>
+                                            </td>
+                                            <td className="px-4 py-3 text-right font-bold text-white">₹{t.amount.toLocaleString()}</td>
+                                            <td className="px-4 py-3 text-center">
+                                                <span className="px-2 py-1 rounded-full text-xs bg-yellow-500/20 text-yellow-500">{t.status}</span>
+                                            </td>
+                                        </tr>
+                                    ))
                                 ) : (
                                     <tr><td colSpan="4" className="px-4 py-8 text-center text-gray-500">No transactions found.</td></tr>
                                 )}
                             </tbody>
                         </table>
                     </div>
+                    <PaginationControls
+                        currentPage={currentPage}
+                        totalPages={totalPages}
+                        onNext={nextPage}
+                        onPrev={prevPage}
+                        hasPages={hasPages}
+                    />
                 </div>
             )}
 
             {/* Add Customer Modal */}
-            {showAddModal && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-                    <div className="bg-card-bg w-full max-w-2xl rounded-xl border border-gray-800 shadow-2xl animate-scale-in max-h-[90vh] overflow-y-auto">
-                        <div className="p-4 border-b border-gray-800 flex justify-between items-center bg-gray-900/50">
-                            <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                                <User size={20} className="text-primary-orange" /> Add New Credit Customer
-                            </h3>
-                            <button onClick={() => setShowAddModal(false)} className="text-gray-400 hover:text-white"><X size={20} /></button>
+            {
+                showAddModal && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+                        <div className="bg-card-bg w-full max-w-2xl rounded-xl border border-gray-800 shadow-2xl animate-scale-in max-h-[90vh] overflow-y-auto">
+                            <div className="p-4 border-b border-gray-800 flex justify-between items-center bg-gray-900/50">
+                                <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                                    <User size={20} className="text-primary-orange" /> Add New Credit Customer
+                                </h3>
+                                <button onClick={() => setShowAddModal(false)} className="text-gray-400 hover:text-white"><X size={20} /></button>
+                            </div>
+                            <form onSubmit={handleAddCustomer} className="p-6 space-y-6">
+                                {/* Personal Info */}
+                                <div className="space-y-4">
+                                    <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider border-b border-gray-800 pb-2">Account Details</h4>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-sm text-gray-400 mb-1">Customer/Company Name</label>
+                                            <input
+                                                type="text"
+                                                required
+                                                className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-primary-orange"
+                                                value={newCustomer.name}
+                                                onChange={e => setNewCustomer({ ...newCustomer, name: e.target.value })}
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm text-gray-400 mb-1">Phone Number</label>
+                                            <input
+                                                type="tel"
+                                                required
+                                                className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-primary-orange"
+                                                value={newCustomer.phone}
+                                                onChange={e => setNewCustomer({ ...newCustomer, phone: e.target.value })}
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm text-gray-400 mb-1">Email (Login ID)</label>
+                                            <input
+                                                type="email"
+                                                required
+                                                className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-primary-orange"
+                                                value={newCustomer.email}
+                                                onChange={e => setNewCustomer({ ...newCustomer, email: e.target.value })}
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm text-gray-400 mb-1">Password</label>
+                                            <input
+                                                type="password"
+                                                required
+                                                className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-primary-orange"
+                                                value={newCustomer.password}
+                                                onChange={e => setNewCustomer({ ...newCustomer, password: e.target.value })}
+                                            />
+                                        </div>
+                                        <div className="md:col-span-2">
+                                            <label className="block text-sm text-gray-400 mb-1">Credit Limit (₹)</label>
+                                            <input
+                                                type="number"
+                                                required
+                                                className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-primary-orange font-mono"
+                                                value={newCustomer.creditLimit}
+                                                onChange={e => setNewCustomer({ ...newCustomer, creditLimit: e.target.value })}
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Vehicle Info */}
+                                <div className="space-y-4">
+                                    <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider border-b border-gray-800 pb-2">Initial Vehicle Details</h4>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-sm text-gray-400 mb-1">Driver Name</label>
+                                            <input
+                                                type="text"
+                                                required
+                                                className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-primary-orange"
+                                                value={newCustomer.driverName}
+                                                onChange={e => setNewCustomer({ ...newCustomer, driverName: e.target.value })}
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm text-gray-400 mb-1">Vehicle Model</label>
+                                            <input
+                                                type="text"
+                                                required
+                                                className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-primary-orange"
+                                                value={newCustomer.vehicleModel}
+                                                onChange={e => setNewCustomer({ ...newCustomer, vehicleModel: e.target.value })}
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm text-gray-400 mb-1">Plate Number</label>
+                                            <input
+                                                type="text"
+                                                required
+                                                className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-primary-orange uppercase"
+                                                value={newCustomer.plateNumber}
+                                                onChange={e => setNewCustomer({ ...newCustomer, plateNumber: e.target.value })}
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm text-gray-400 mb-1">Fuel Type</label>
+                                            <select
+                                                className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-primary-orange"
+                                                value={newCustomer.fuelType}
+                                                onChange={e => setNewCustomer({ ...newCustomer, fuelType: e.target.value })}
+                                            >
+                                                <option value="Diesel">Diesel</option>
+                                                <option value="Petrol">Petrol</option>
+                                                <option value="CNG">CNG</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <button
+                                    type="submit"
+                                    disabled={creating}
+                                    className="w-full py-3 bg-primary-orange text-white font-bold rounded-lg hover:bg-orange-600 shadow-lg flex items-center justify-center gap-2"
+                                >
+                                    {creating ? "Creating Account..." : <><Save size={20} /> Create Customer Account</>}
+                                </button>
+                            </form>
                         </div>
-                        <form onSubmit={handleAddCustomer} className="p-6 space-y-6">
-                            {/* Personal Info */}
-                            <div className="space-y-4">
-                                <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider border-b border-gray-800 pb-2">Account Details</h4>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <div>
-                                        <label className="block text-sm text-gray-400 mb-1">Customer/Company Name</label>
-                                        <input
-                                            type="text"
-                                            required
-                                            className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-primary-orange"
-                                            value={newCustomer.name}
-                                            onChange={e => setNewCustomer({ ...newCustomer, name: e.target.value })}
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="block text-sm text-gray-400 mb-1">Phone Number</label>
-                                        <input
-                                            type="tel"
-                                            required
-                                            className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-primary-orange"
-                                            value={newCustomer.phone}
-                                            onChange={e => setNewCustomer({ ...newCustomer, phone: e.target.value })}
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="block text-sm text-gray-400 mb-1">Email (Login ID)</label>
-                                        <input
-                                            type="email"
-                                            required
-                                            className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-primary-orange"
-                                            value={newCustomer.email}
-                                            onChange={e => setNewCustomer({ ...newCustomer, email: e.target.value })}
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="block text-sm text-gray-400 mb-1">Password</label>
-                                        <input
-                                            type="password"
-                                            required
-                                            className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-primary-orange"
-                                            value={newCustomer.password}
-                                            onChange={e => setNewCustomer({ ...newCustomer, password: e.target.value })}
-                                        />
-                                    </div>
-                                    <div className="md:col-span-2">
-                                        <label className="block text-sm text-gray-400 mb-1">Credit Limit (₹)</label>
-                                        <input
-                                            type="number"
-                                            required
-                                            className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-primary-orange font-mono"
-                                            value={newCustomer.creditLimit}
-                                            onChange={e => setNewCustomer({ ...newCustomer, creditLimit: e.target.value })}
-                                        />
-                                    </div>
-                                </div>
-                            </div>
-
-                            {/* Vehicle Info */}
-                            <div className="space-y-4">
-                                <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider border-b border-gray-800 pb-2">Initial Vehicle Details</h4>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <div>
-                                        <label className="block text-sm text-gray-400 mb-1">Driver Name</label>
-                                        <input
-                                            type="text"
-                                            required
-                                            className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-primary-orange"
-                                            value={newCustomer.driverName}
-                                            onChange={e => setNewCustomer({ ...newCustomer, driverName: e.target.value })}
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="block text-sm text-gray-400 mb-1">Vehicle Model</label>
-                                        <input
-                                            type="text"
-                                            required
-                                            className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-primary-orange"
-                                            value={newCustomer.vehicleModel}
-                                            onChange={e => setNewCustomer({ ...newCustomer, vehicleModel: e.target.value })}
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="block text-sm text-gray-400 mb-1">Plate Number</label>
-                                        <input
-                                            type="text"
-                                            required
-                                            className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-primary-orange uppercase"
-                                            value={newCustomer.plateNumber}
-                                            onChange={e => setNewCustomer({ ...newCustomer, plateNumber: e.target.value })}
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="block text-sm text-gray-400 mb-1">Fuel Type</label>
-                                        <select
-                                            className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-primary-orange"
-                                            value={newCustomer.fuelType}
-                                            onChange={e => setNewCustomer({ ...newCustomer, fuelType: e.target.value })}
-                                        >
-                                            <option value="Diesel">Diesel</option>
-                                            <option value="Petrol">Petrol</option>
-                                            <option value="CNG">CNG</option>
-                                        </select>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <button
-                                type="submit"
-                                disabled={creating}
-                                className="w-full py-3 bg-primary-orange text-white font-bold rounded-lg hover:bg-orange-600 shadow-lg flex items-center justify-center gap-2"
-                            >
-                                {creating ? "Creating Account..." : <><Save size={20} /> Create Customer Account</>}
-                            </button>
-                        </form>
                     </div>
-                </div>
-            )}
-        </div>
+                )
+            }
+        </div >
     );
 }

@@ -137,6 +137,11 @@ export default function ShiftVerification() {
             const cashOnline = parseFloat(editForm.cashOnline) || 0;
             const change = parseFloat(editForm.change) || 0;
 
+            // Fetch Tank ID First (for stock adjustment)
+            const tanksQuery = query(collection(db, "tanks"), where("fuelType", "==", selectedShift.fuelType));
+            const tanksSnapshot = await getDocs(tanksQuery);
+            const tankId = tanksSnapshot.empty ? null : tanksSnapshot.docs[0].id; // Assign first tank found
+
             // Original values from the shift log (Staff's claim)
             const originalReturned = selectedShift.cashReturned || 0;
             const originalOnline = selectedShift.cashOnline || 0;
@@ -165,7 +170,26 @@ export default function ShiftVerification() {
                 const userRef = doc(db, "users", selectedShift.attendantId);
                 const userDoc = await transaction.get(userRef);
 
+                let tankRef = null;
+                let tankDoc = null;
+                if (tankId) {
+                    tankRef = doc(db, "tanks", tankId);
+                    tankDoc = await transaction.get(tankRef);
+                }
+
                 if (!userDoc.exists()) throw new Error("User not found");
+
+                // 0. Fetch Tank for Stock Adjustment (if litres changed)
+                const oldTotalLitres = selectedShift.totalLitres || (selectedShift.endReading - selectedShift.startReading);
+                const litreDiff = totalLitres - oldTotalLitres;
+
+
+
+                if (Math.abs(litreDiff) > 0.01) {
+                    // Need to find tank. We do this by query inside transaction? No, queries not supported in runTransaction easily for "find".
+                    // Best to fetch tank OUTSIDE transaction if possible, or assume 1 tank per fuel type.
+                    // We will do a query before transaction to get Tank ID.
+                }
 
                 // 1. Update Shift
                 transaction.update(shiftRef, {
@@ -190,6 +214,16 @@ export default function ShiftVerification() {
                 transaction.update(userRef, {
                     cashInHand: currentCashInHand + totalAdjustment
                 });
+
+                // 4. Update Tank Stock if needed
+                if (tankRef && tankDoc && Math.abs(totalLitres - (selectedShift.totalLitres || 0)) > 0.001) {
+                    const oldLitres = selectedShift.totalLitres || 0;
+                    const diff = totalLitres - oldLitres; // Positive means we sold MORE, so Need to DEDUCT MORE.
+                    const currentStock = tankDoc.data().currentLevel || 0;
+                    transaction.update(tankRef, {
+                        currentLevel: currentStock - diff
+                    });
+                }
 
                 // 4. Add to Daily Sales
                 const salesRef = doc(collection(db, "daily_sales"));

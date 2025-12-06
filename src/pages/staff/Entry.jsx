@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useAuth } from "../../contexts/AuthContext";
 import { db } from "../../firebase";
 import { collection, getDocs, addDoc, updateDoc, doc, serverTimestamp, query, where, orderBy, limit, runTransaction, onSnapshot } from "firebase/firestore";
-import { LogOut, Fuel, Save, Calculator, AlertCircle, Mic, Play, Square, Clock, Wallet, X, ArrowRightLeft, Check, User, Calendar as CalendarIcon } from "lucide-react";
+import { LogOut, Fuel, Save, Calculator, AlertCircle, Mic, Play, Square, Clock, Wallet, X, ArrowRightLeft, Check, User, Calendar as CalendarIcon, CreditCard, Truck } from "lucide-react";
 import { useVoice } from "../../contexts/VoiceContext";
 import Calendar from "../../components/common/Calendar";
 
@@ -20,12 +20,14 @@ export default function StaffEntry() {
     const [userCashInHand, setUserCashInHand] = useState(0);
     const [otherAttendants, setOtherAttendants] = useState([]);
     const [pendingTransfers, setPendingTransfers] = useState([]);
+    const [customers, setCustomers] = useState([]); // Added customers state
 
     // Modals
     const [showStartModal, setShowStartModal] = useState(false);
     const [showEndModal, setShowEndModal] = useState(false);
     const [showLendModal, setShowLendModal] = useState(false);
     const [showHistoryModal, setShowHistoryModal] = useState(false);
+    const [showCreditModal, setShowCreditModal] = useState(false); // Added Credit Modal
 
     // History State
     const [shiftHistory, setShiftHistory] = useState([]); // Array of Date objects
@@ -53,6 +55,12 @@ export default function StaffEntry() {
         amount: ""
     });
 
+    const [creditForm, setCreditForm] = useState({
+        customerId: "",
+        vehicleNumber: "",
+        amount: ""
+    });
+
     // Fetch Data & Listeners
     useEffect(() => {
         async function fetchData() {
@@ -75,6 +83,10 @@ export default function StaffEntry() {
                     .map(doc => ({ id: doc.id, ...doc.data() }))
                     .filter(u => u.id !== currentUser.uid);
                 setOtherAttendants(attendants);
+
+                // 3. Fetch Customers (for Credit Sales)
+                const customersSnapshot = await getDocs(collection(db, "customers"));
+                setCustomers(customersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
 
             } catch (err) {
                 console.error("Error fetching data:", err);
@@ -230,7 +242,18 @@ export default function StaffEntry() {
             const netLitres = totalLitres - testingLitres; // Calculate net litres
             const cashRemaining = parseFloat(endForm.cashRemaining) || 0;
 
+            // Fetch Tank ID for Fuel Type
+            const tanksQuery = query(collection(db, "tanks"), where("fuelType", "==", activeShift.fuelType));
+            const tanksSnapshot = await getDocs(tanksQuery);
+            if (tanksSnapshot.empty) throw new Error(`No tank found for ${activeShift.fuelType}`);
+            const tankId = tanksSnapshot.docs[0].id;
+
             await runTransaction(db, async (transaction) => {
+                // 0. READ: Get Tank Doc (Must be before writes)
+                const tankRef = doc(db, "tanks", tankId);
+                const tankDoc = await transaction.get(tankRef);
+                if (!tankDoc.exists()) throw new Error("Tank not found");
+
                 // 1. Update Shift Log
                 const shiftRef = doc(db, "shift_logs", activeShift.id);
                 transaction.update(shiftRef, {
@@ -273,6 +296,12 @@ export default function StaffEntry() {
                     totalLitres: totalLitres,
                     testingLitres: testingLitres, // Save testing litres
                     timestamp: serverTimestamp(),
+                });
+
+                // 5. Update Tank Stock (Decrement)
+                const currentLevel = tankDoc.data().currentLevel || 0;
+                transaction.update(tankRef, {
+                    currentLevel: currentLevel - totalLitres // Total litres leaves the tank, including testing
                 });
             });
 
@@ -418,7 +447,6 @@ export default function StaffEntry() {
 
                 // 1. Delete Shift Log
                 transaction.delete(shiftRef);
-
                 // 2. Revert User Cash (subtract cashToHandle)
                 const userDoc = await transaction.get(userRef);
                 if (userDoc.exists()) {
@@ -433,6 +461,112 @@ export default function StaffEntry() {
         } catch (err) {
             console.error("Error cancelling request:", err);
             setError("Failed to cancel request.");
+        }
+    };
+
+    // Handle Credit Sale
+    const handleCreditSale = async (e) => {
+        e.preventDefault();
+        setSubmitting(true);
+        setError("");
+
+        try {
+            const amount = parseFloat(creditForm.amount);
+            if (!amount || amount <= 0) throw new Error("Invalid amount");
+            if (!creditForm.customerId) throw new Error("Please select a customer");
+
+            const customer = customers.find(c => c.id === creditForm.customerId);
+            if (!customer) throw new Error("Customer not found");
+
+            // Check Credit Limit
+            const currentBalance = customer.outstandingBalance || 0;
+            const limit = customer.creditLimit || 0;
+            if (currentBalance + amount > limit) {
+                throw new Error(`Credit limit exceeded! Available: ₹${(limit - currentBalance).toFixed(2)}`);
+            }
+
+            // Find Vehicle Details
+            let vehicleDetails = {
+                vehicleNumber: creditForm.vehicleNumber || "N/A",
+                vehicleModel: "Unknown",
+                fuelType: "Unknown"
+            };
+
+            if (customer.vehicles) {
+                const foundVehicle = customer.vehicles.find(v => {
+                    const plate = typeof v === 'object' ? v.plateNumber : v;
+                    return plate === creditForm.vehicleNumber;
+                });
+                if (foundVehicle && typeof foundVehicle === 'object') {
+                    vehicleDetails = {
+                        vehicleNumber: foundVehicle.plateNumber,
+                        vehicleModel: foundVehicle.vehicleModel || "Unknown",
+                        fuelType: foundVehicle.fuelType || "Unknown"
+                    };
+                } else if (foundVehicle) {
+                    vehicleDetails.vehicleNumber = foundVehicle;
+                }
+            }
+
+            await runTransaction(db, async (transaction) => {
+                // 0. READ: Get Daily Sheet (Must be before writes)
+                const todayStr = new Date().toISOString().split('T')[0];
+                const sheetRef = doc(db, "daily_sheets", todayStr);
+                const sheetDoc = await transaction.get(sheetRef);
+
+                // 1. Create Credit Transaction
+                const transactionRef = doc(collection(db, "credit_transactions"));
+                transaction.set(transactionRef, {
+                    customerId: customer.id,
+                    customerName: customer.name,
+                    ...vehicleDetails,
+                    amount: amount,
+                    date: serverTimestamp(),
+                    status: "Completed",
+                    loggedBy: currentUser.uid,
+                    loggedByName: currentUser.email
+                });
+
+                // 2. Update Customer Balance
+                const customerRef = doc(db, "customers", customer.id);
+                transaction.update(customerRef, {
+                    outstandingBalance: (customer.outstandingBalance || 0) + amount
+                });
+
+                // 3. Update Daily Sheet (if exists)
+                if (sheetDoc.exists()) {
+                    const sheetData = sheetDoc.data();
+                    const updatedPayments = sheetData.payments.map(p => {
+                        if (p.type === "Credit") {
+                            return { ...p, amount: (parseFloat(p.amount) || 0) + amount };
+                        }
+                        return p;
+                    });
+                    const totalPayment = updatedPayments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
+                    const netCollection = totalPayment - (sheetData.totalExpense || 0);
+
+                    transaction.update(sheetRef, {
+                        payments: updatedPayments,
+                        totalPayment,
+                        netCollection,
+                        updatedAt: new Date().toISOString()
+                    });
+                }
+            });
+
+            setSuccess("Credit sale logged successfully!");
+            setShowCreditModal(false);
+            setCreditForm({ customerId: "", vehicleNumber: "", amount: "" });
+
+            // Refresh customers to get new balance
+            const customersSnapshot = await getDocs(collection(db, "customers"));
+            setCustomers(customersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+
+        } catch (err) {
+            console.error("Error logging credit sale:", err);
+            setError(err.message || "Failed to log credit sale.");
+        } finally {
+            setSubmitting(false);
         }
     };
 
@@ -581,6 +715,13 @@ export default function StaffEntry() {
                                 <span className="text-xl font-mono font-bold text-white">₹{userCashInHand}</span>
                             </div>
                         </div>
+
+                        <button
+                            onClick={() => setShowCreditModal(true)}
+                            className="w-full mt-6 py-3 bg-blue-600/20 text-blue-400 border border-blue-500/50 rounded-lg font-bold hover:bg-blue-600/30 transition-colors flex items-center justify-center gap-2"
+                        >
+                            <CreditCard size={20} /> Log Credit Sale
+                        </button>
                     </div>
                 </div>
             ) : activeShift && activeShift.status === "PendingStartVerification" ? (
@@ -781,6 +922,88 @@ export default function StaffEntry() {
                                 {submitting ? "Starting..." : "Start Job"}
                             </button>
                         </form>
+                    </div>
+                </div>
+            )}
+
+            {/* Credit Sale Modal */}
+            {showCreditModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+                    <div className="bg-card-bg w-full max-w-md rounded-xl border border-gray-800 shadow-2xl animate-scale-in">
+                        <div className="p-4 border-b border-gray-800 flex justify-between items-center">
+                            <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                                <CreditCard size={20} className="text-primary-orange" /> Credit Sale
+                            </h3>
+                            <button onClick={() => setShowCreditModal(false)} className="text-gray-400 hover:text-white"><X size={20} /></button>
+                        </div>
+                        <form onSubmit={handleCreditSale} className="p-4 space-y-4">
+                            <div>
+                                <label className="block text-sm text-gray-400 mb-1">Select Customer</label>
+                                <select
+                                    required
+                                    className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-primary-orange"
+                                    value={creditForm.customerId}
+                                    onChange={e => setCreditForm({ ...creditForm, customerId: e.target.value, vehicleNumber: "" })}
+                                >
+                                    <option value="">-- Choose Customer --</option>
+                                    {customers.map(c => (
+                                        <option key={c.id} value={c.id}>{c.name}</option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            {creditForm.customerId && (
+                                <>
+                                    <div className="bg-gray-800/50 p-3 rounded-lg border border-gray-700 flex justify-between items-center">
+                                        <span className="text-xs text-gray-500">Available Limit</span>
+                                        <span className={`font-bold ${(customers.find(c => c.id === creditForm.customerId)?.creditLimit || 0) - (customers.find(c => c.id === creditForm.customerId)?.outstandingBalance || 0) < 1000
+                                            ? 'text-red-500'
+                                            : 'text-green-500'
+                                            }`}>
+                                            ₹{((customers.find(c => c.id === creditForm.customerId)?.creditLimit || 0) - (customers.find(c => c.id === creditForm.customerId)?.outstandingBalance || 0)).toLocaleString()}
+                                        </span>
+                                    </div>
+
+                                    <div>
+                                        <label className="block text-sm text-gray-400 mb-1">Select Vehicle</label>
+                                        <div className="relative">
+                                            <Truck className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={18} />
+                                            <select
+                                                required
+                                                className="w-full pl-10 pr-4 py-3 bg-gray-900 border border-gray-700 rounded-lg focus:ring-2 focus:ring-primary-orange text-white appearance-none"
+                                                value={creditForm.vehicleNumber}
+                                                onChange={e => setCreditForm({ ...creditForm, vehicleNumber: e.target.value })}
+                                            >
+                                                <option value="">-- Select Vehicle --</option>
+                                                {customers.find(c => c.id === creditForm.customerId)?.vehicles?.map((v, idx) => {
+                                                    const plate = typeof v === 'object' ? v.plateNumber : v;
+                                                    const model = typeof v === 'object' ? v.vehicleModel : '';
+                                                    return <option key={idx} value={plate}>{plate} {model ? `- ${model}` : ''}</option>;
+                                                })}
+                                            </select>
+                                        </div>
+                                    </div>
+
+                                    <div>
+                                        <label className="block text-sm text-gray-400 mb-1">Amount (₹)</label>
+                                        <input
+                                            type="number"
+                                            required
+                                            min="1"
+                                            className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-primary-orange font-mono text-lg"
+                                            value={creditForm.amount}
+                                            onChange={e => setCreditForm({ ...creditForm, amount: e.target.value })}
+                                            placeholder="0.00"
+                                        />
+                                    </div>
+
+                                    <button type="submit" disabled={submitting} className="w-full py-3 bg-primary-orange text-white font-bold rounded-lg hover:bg-orange-600 shadow-lg mt-2">
+                                        {submitting ? "Processing..." : "Confirm Sale"}
+                                    </button>
+                                </>
+                            )}
+                        </form>
+
                     </div>
                 </div>
             )}

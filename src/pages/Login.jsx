@@ -1,6 +1,8 @@
 import { useState, useEffect } from "react";
 import { useAuth } from "../contexts/AuthContext";
 import { useNavigate } from "react-router-dom";
+import { doc, getDoc } from "firebase/firestore";
+import { db } from "../firebase"; // Ensure path is correct
 import { Fuel, Lock, Mail, UserCircle } from "lucide-react";
 
 export default function Login() {
@@ -31,13 +33,22 @@ export default function Login() {
             setLoading(true);
             if (isSignup) {
                 await signup(email, password, selectedRole);
-                // Redirect will be handled by useEffect once userRole is set in context
+                // Redirect will be handled by useEffect
             } else {
-                await login(email, password);
-                // Redirect will be handled by useEffect once userRole is fetched
+                const userCredential = await login(email, password);
+                const user = userCredential.user;
+
+                // Manual Check for Disabled Status to show error
+                const docRef = doc(db, "users", user?.uid);
+                const docSnap = await getDoc(docRef);
+                if (docSnap.exists() && docSnap.data().disabled) {
+                    throw new Error("Your account has been disabled. Please contact the administrator.");
+                }
+
+                // Redirect will be handled by useEffect
             }
         } catch (err) {
-            setError("Failed to " + (isSignup ? "create account" : "log in") + ": " + err.message);
+            setError(err.message.replace("Firebase: ", "").replace("Error ", ""));
             setLoading(false);
         }
         // Note: We don't set loading(false) on success because we want to show "Processing..." 
