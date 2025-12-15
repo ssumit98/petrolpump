@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useAuth } from "../../contexts/AuthContext";
 import { db, storage } from "../../firebase";
 import { collection, query, where, getDocs, orderBy, addDoc, updateDoc, doc, arrayUnion, serverTimestamp, limit, getDoc } from "firebase/firestore";
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { ref, getDownloadURL } from "firebase/storage"; // uploadBytes removed
 import { LogOut, Download, FileText, CreditCard, AlertCircle, Truck, Plus, X, Upload, CheckCircle, Search } from "lucide-react";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -68,6 +68,10 @@ export default function CustomerCredits() {
         receipt: null
     });
     const [uploading, setUploading] = useState(false);
+
+    // CLOUDINARY CONFIG (Replace with your details)
+    const CLOUD_NAME = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME;
+    const UPLOAD_PRESET = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET;
 
     useEffect(() => {
         async function fetchData() {
@@ -167,12 +171,31 @@ export default function CustomerCredits() {
         setUploading(true);
 
         try {
-            // 1. Upload Receipt (Optional)
+            // 1. Upload Receipt to Cloudinary
             let receiptUrl = null;
             if (paymentForm.receipt) {
-                const fileRef = ref(storage, `receipts/${Date.now()}_${paymentForm.receipt.name}`);
-                await uploadBytes(fileRef, paymentForm.receipt);
-                receiptUrl = await getDownloadURL(fileRef);
+
+
+                const dateObj = new Date();
+                const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+                const folderName = `PetrolPump/${monthNames[dateObj.getMonth()]}_${dateObj.getFullYear()}`;
+
+                const formData = new FormData();
+                formData.append("file", paymentForm.receipt);
+                formData.append("upload_preset", UPLOAD_PRESET);
+                formData.append("folder", folderName); // Cloudinary auto-creates folder if missing
+
+                const res = await fetch(`https://api.cloudinary.com/v1_1/${CLOUD_NAME}/image/upload`, {
+                    method: "POST",
+                    body: formData
+                });
+
+                const data = await res.json();
+                if (data.secure_url) {
+                    receiptUrl = data.secure_url;
+                } else {
+                    throw new Error("Cloudinary upload failed");
+                }
             }
 
             // 2. Create Payment Request

@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { db } from "../../firebase";
 import { useAuth } from "../../contexts/AuthContext";
 import { collection, getDocs, query, where, orderBy, limit, doc, getDoc, updateDoc, setDoc, serverTimestamp, runTransaction, increment } from "firebase/firestore";
-import { Calendar as CalendarIcon, DollarSign, Droplets, TrendingUp, Save, FileText, Plus, Trash2, TrendingDown, Edit, X } from "lucide-react";
+import { Calendar as CalendarIcon, DollarSign, Droplets, TrendingUp, Save, FileText, Plus, Trash2, TrendingDown, Edit, X, Download } from "lucide-react";
 import Calendar from "../../components/common/Calendar";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -454,6 +454,126 @@ export default function ManagerOperations() {
         }
     };
 
+    const handleDownloadSheetPDF = () => {
+        const doc = new jsPDF();
+        const dateStr = selectedDate.toLocaleDateString('en-IN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+
+        // Title
+        doc.setFontSize(22);
+        doc.setTextColor(255, 100, 0); // Orange
+        doc.text("Daily Operations Report", 14, 20);
+
+        doc.setFontSize(10);
+        doc.setTextColor(100);
+        doc.text(`Date: ${dateStr}`, 14, 28);
+        doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 33);
+
+        // 1. Sales Summary
+        doc.setFontSize(14);
+        doc.setTextColor(0);
+        doc.text("1. Fuel Sales Summary", 14, 45);
+
+        const salesHead = [["Nozzle", "Opening", "Closing", "Sale (L)", "Amount (Rs)"]];
+        const salesBody = dailyStats.nozzleStats.map(stat => [
+            `${stat.nozzleName} (${stat.fuelType})`,
+            stat.openingReading,
+            stat.closingReading,
+            stat.totalLitres.toFixed(2),
+            stat.amount.toFixed(2)
+        ]);
+
+        // Add Totals Row
+        salesBody.push([
+            { content: 'TOTAL', colSpan: 3, styles: { fontStyle: 'bold', halign: 'right' } },
+            dailyStats.totalLitres.toFixed(2),
+            (dailyStats.totalPetrolAmount + dailyStats.totalDieselAmount).toFixed(2)
+        ]);
+
+        autoTable(doc, {
+            startY: 50,
+            head: salesHead,
+            body: salesBody,
+            theme: 'grid',
+            headStyles: { fillColor: [60, 60, 60] },
+            footStyles: { fillColor: [240, 240, 240] }
+        });
+
+        // 2. Financials (Payments)
+        let finalY = doc.lastAutoTable.finalY + 15;
+        doc.text("2. Payments Received", 14, finalY);
+
+        const payHead = [["Type", "Notes", "Amount (Rs)"]];
+        const payBody = payments.map(p => [p.type, p.notes, parseFloat(p.amount || 0).toFixed(2)]);
+        const totalPay = payments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
+        payBody.push([
+            { content: 'Total Received', colSpan: 2, styles: { fontStyle: 'bold', halign: 'right' } },
+            totalPay.toFixed(2)
+        ]);
+
+        autoTable(doc, {
+            startY: finalY + 5,
+            head: payHead,
+            body: payBody,
+            theme: 'striped',
+            headStyles: { fillColor: [0, 128, 0] } // Green
+        });
+
+        // 3. Expenses
+        finalY = doc.lastAutoTable.finalY + 15;
+        // Check page break
+        if (finalY > 250) {
+            doc.addPage();
+            finalY = 20;
+        }
+
+        doc.text("3. Expenses", 14, finalY);
+
+        const expHead = [["Type", "Mode", "Notes", "Amount (Rs)"]];
+        const expBody = expenses.map(e => [
+            e.type,
+            e.mode || 'Cash',
+            e.notes,
+            parseFloat(e.amount || 0).toFixed(2)
+        ]);
+        const totalExp = expenses.reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0);
+        expBody.push([
+            { content: 'Total Expenses', colSpan: 3, styles: { fontStyle: 'bold', halign: 'right' } },
+            totalExp.toFixed(2)
+        ]);
+
+        autoTable(doc, {
+            startY: finalY + 5,
+            head: expHead,
+            body: expBody,
+            theme: 'striped',
+            headStyles: { fillColor: [200, 0, 0] } // Red
+        });
+
+        // 4. Net Summary
+        finalY = doc.lastAutoTable.finalY + 15;
+        const netCollection = totalPay - totalExp;
+
+        doc.setFontSize(14);
+        doc.setTextColor(0);
+        doc.text("Summary", 14, finalY);
+
+        doc.setFontSize(12);
+        doc.text(`Total Payments: Rs ${totalPay.toFixed(2)}`, 14, finalY + 10);
+        doc.text(`Total Expenses: Rs ${totalExp.toFixed(2)}`, 14, finalY + 16);
+
+        doc.setFontSize(16);
+        if (netCollection >= 0) {
+            doc.setTextColor(0, 128, 0);
+            doc.text(`Net Collection: Rs ${netCollection.toFixed(2)}`, 14, finalY + 26);
+        } else {
+            doc.setTextColor(200, 0, 0);
+            doc.text(`Net Deficit: Rs ${netCollection.toFixed(2)}`, 14, finalY + 26);
+        }
+
+        doc.save(`Daily_Report_${selectedDate.toISOString().split('T')[0]}.pdf`);
+    };
+
+
     return (
         <div className="space-y-8 animate-fade-in">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -743,6 +863,12 @@ export default function ManagerOperations() {
                             className="px-8 py-3 bg-primary-orange text-white rounded-xl hover:bg-orange-600 font-bold shadow-lg flex items-center gap-2 disabled:opacity-50"
                         >
                             {savingSheet ? "Saving..." : <><Save size={20} /> Save Daily Sheet</>}
+                        </button>
+                        <button
+                            onClick={handleDownloadSheetPDF}
+                            className="px-6 py-3 bg-gray-800 text-white rounded-xl hover:bg-gray-700 font-bold shadow-lg flex items-center gap-2 border border-gray-700"
+                        >
+                            <Download size={20} /> Download PDF
                         </button>
                     </div>
                 </div>
