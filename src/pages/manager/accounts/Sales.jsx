@@ -522,43 +522,70 @@ export default function Sales() {
                         <thead className="bg-gray-900/50 uppercase font-medium text-xs text-gray-500">
                             <tr>
                                 <th className="px-4 py-3">Date</th>
-                                <th className="px-4 py-3 text-right">Total Sales (₹)</th>
-                                <th className="px-4 py-3 text-right">Total Expenses (₹)</th>
-                                <th className="px-4 py-3 text-right">Net Collection (₹)</th>
+                                <th className="px-4 py-3 text-right text-green-400">Cash</th>
+                                <th className="px-4 py-3 text-right text-blue-400">Online</th>
+                                <th className="px-4 py-3 text-right text-orange-400">Credit</th>
+                                <th className="px-4 py-3 text-right">Total Sales</th>
+                                <th className="px-4 py-3 text-right">Total Expenses</th>
+                                <th className="px-4 py-3 text-right">Net Collection</th>
                                 <th className="px-4 py-3 text-center">Status</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-800">
                             {loading ? (
-                                <tr><td colSpan="5" className="px-4 py-8 text-center">Loading...</td></tr>
+                                <tr><td colSpan="8" className="px-4 py-8 text-center">Loading...</td></tr>
                             ) : sheets.length === 0 ? (
-                                <tr><td colSpan="5" className="px-4 py-8 text-center text-gray-500">No records found for this month.</td></tr>
+                                <tr><td colSpan="8" className="px-4 py-8 text-center text-gray-500">No records found for this month.</td></tr>
                             ) : (
                                 <>
-                                    {currentSheets.map((sheet, index) => (
-                                        <tr key={index} className="hover:bg-gray-800/30 transition-colors">
-                                            <td className="px-4 py-3 font-medium text-white">
-                                                {new Date(sheet.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
-                                            </td>
-                                            <td className="px-4 py-3 text-right font-mono text-green-400">
-                                                ₹{(sheet.totalPayment || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                                            </td>
-                                            <td className="px-4 py-3 text-right font-mono text-red-400">
-                                                ₹{(sheet.totalExpense || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                                            </td>
-                                            <td className="px-4 py-3 text-right font-mono font-bold ${(sheet.netCollection || 0) >= 0 ? 'text-white' : 'text-red-500'}">
-                                                ₹{(sheet.netCollection || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                                            </td>
-                                            <td className="px-4 py-3 text-center">
-                                                <span className="px-2 py-1 bg-green-500/20 text-green-500 rounded-full text-xs font-bold">
-                                                    Saved
-                                                </span>
-                                            </td>
-                                        </tr>
-                                    ))}
+                                    {currentSheets.map((sheet, index) => {
+                                        const cashSale = sheet.payments?.filter(p => p.type === "Attendant Cash").reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0) || 0;
+                                        const creditSale = sheet.payments?.filter(p => p.type === "Credit").reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0) || 0;
+                                        const onlineSale = sheet.payments?.filter(p => p.type !== "Attendant Cash" && p.type !== "Credit").reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0) || 0;
+
+                                        return (
+                                            <tr key={index} className="hover:bg-gray-800/30 transition-colors">
+                                                <td className="px-4 py-3 font-medium text-white">
+                                                    {new Date(sheet.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+                                                </td>
+                                                <td className="px-4 py-3 text-right font-mono text-green-400">
+                                                    ₹{cashSale.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                                                </td>
+                                                <td className="px-4 py-3 text-right font-mono text-blue-400">
+                                                    ₹{onlineSale.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                                                </td>
+                                                <td className="px-4 py-3 text-right font-mono text-orange-400">
+                                                    ₹{creditSale.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                                                </td>
+                                                <td className="px-4 py-3 text-right font-mono font-bold text-white">
+                                                    ₹{(sheet.totalPayment || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                                                </td>
+                                                <td className="px-4 py-3 text-right font-mono text-red-400">
+                                                    ₹{(sheet.totalExpense || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                                                </td>
+                                                <td className={`px-4 py-3 text-right font-mono font-bold ${(sheet.netCollection || 0) >= 0 ? 'text-white' : 'text-red-500'}`}>
+                                                    ₹{(sheet.netCollection || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                                                </td>
+                                                <td className="px-4 py-3 text-center">
+                                                    <span className="px-2 py-1 bg-green-500/20 text-green-500 rounded-full text-xs font-bold">
+                                                        Saved
+                                                    </span>
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
                                     {/* Summary Row */}
                                     <tr className="bg-gray-900/50 font-bold text-white">
                                         <td className="px-4 py-3">TOTAL</td>
+                                        <td className="px-4 py-3 text-right text-green-400">
+                                            ₹{sheets.reduce((sum, s) => sum + (s.payments?.filter(p => p.type === "Attendant Cash").reduce((a, b) => a + (parseFloat(b.amount) || 0), 0) || 0), 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                                        </td>
+                                        <td className="px-4 py-3 text-right text-blue-400">
+                                            ₹{sheets.reduce((sum, s) => sum + (s.payments?.filter(p => p.type !== "Attendant Cash" && p.type !== "Credit").reduce((a, b) => a + (parseFloat(b.amount) || 0), 0) || 0), 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                                        </td>
+                                        <td className="px-4 py-3 text-right text-orange-400">
+                                            ₹{sheets.reduce((sum, s) => sum + (s.payments?.filter(p => p.type === "Credit").reduce((a, b) => a + (parseFloat(b.amount) || 0), 0) || 0), 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                                        </td>
                                         <td className="px-4 py-3 text-right text-green-500">
                                             ₹{sheets.reduce((sum, s) => sum + (s.totalPayment || 0), 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
                                         </td>

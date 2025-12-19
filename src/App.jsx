@@ -19,12 +19,16 @@ import CustomerCredits from "./pages/customer/MyCredits";
 import { VoiceProvider } from "./contexts/VoiceContext";
 import VoiceAssistant from "./components/VoiceAssistant";
 import OfflineIndicator from "./components/OfflineIndicator";
+import InstallPrompt from "./components/pwa/InstallPrompt";
+import UpdateChecker from "./components/pwa/UpdateChecker";
 
 function App() {
   return (
     <Router>
       <AuthProvider>
         <VoiceProvider>
+          <UpdateChecker />
+          <InstallPrompt />
           <OfflineIndicator />
           <Routes>
             <Route path="/login" element={<Login />} />

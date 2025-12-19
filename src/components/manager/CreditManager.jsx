@@ -568,23 +568,23 @@ export default function CreditManager() {
             {/* Recent Transactions Table */}
             {selectedCustomer && (
                 <div className="bg-card-bg rounded-xl border border-gray-800 overflow-hidden animate-fade-in">
-                    <div className="p-4 border-b border-gray-800 flex justify-between items-center">
+                    <div className="p-4 border-b border-gray-800 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
                         <div className="flex items-center gap-2">
                             <FileText className="text-primary-orange" size={20} />
                             <h3 className="font-semibold text-white">Recent Transactions</h3>
                         </div>
-                        <div className="flex items-center gap-3">
-                            <div className="relative">
+                        <div className="flex items-center gap-3 w-full sm:w-auto">
+                            <div className="relative flex-1 sm:flex-none">
                                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
                                 <input
                                     type="text"
                                     placeholder="Search"
-                                    className="bg-gray-900 border border-gray-700 rounded-lg pl-9 pr-4 py-1.5 text-sm text-white focus:ring-1 focus:ring-primary-orange w-48"
+                                    className="bg-gray-900 border border-gray-700 rounded-lg pl-9 pr-4 py-1.5 text-sm text-white focus:ring-1 focus:ring-primary-orange w-full sm:w-48"
                                     value={transactionSearch}
                                     onChange={(e) => setTransactionSearch(e.target.value)}
                                 />
                             </div>
-                            <button onClick={generatePDF} className="flex items-center gap-2 px-3 py-1.5 bg-primary-orange text-white text-sm rounded-lg hover:bg-orange-600 transition-colors shadow-lg">
+                            <button onClick={generatePDF} className="flex items-center gap-2 px-3 py-1.5 bg-primary-orange text-white text-sm rounded-lg hover:bg-orange-600 transition-colors shadow-lg shrink-0">
                                 <Download size={16} /> Download
                             </button>
                         </div>

@@ -255,7 +255,7 @@ export default function CustomerCredits() {
                     <div className="absolute top-0 right-0 p-4 opacity-5">
                         <CreditCard size={120} />
                     </div>
-                    <div className="relative z-10 flex justify-between items-end">
+                    <div className="relative z-10 flex flex-col sm:flex-row sm:justify-between sm:items-end gap-4">
                         <div>
                             <span className="text-gray-400 text-sm font-medium">Total Outstanding Dues</span>
                             <div className="mt-2 flex items-baseline gap-1">
@@ -269,7 +269,7 @@ export default function CustomerCredits() {
                         </div>
                         <button
                             onClick={() => setShowPaymentModal(true)}
-                            className="px-6 py-3 bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg shadow-lg transition-colors flex items-center gap-2"
+                            className="px-6 py-3 bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg shadow-lg transition-colors flex items-center gap-2 w-full sm:w-auto justify-center"
                         >
                             <CreditCard size={18} /> Pay Now
                         </button>
@@ -280,25 +280,25 @@ export default function CustomerCredits() {
 
                 {/* Authorized Vehicles Table */}
                 <div className="bg-card-bg rounded-xl border border-gray-800 overflow-hidden">
-                    <div className="p-4 border-b border-gray-800 flex justify-between items-center">
+                    <div className="p-4 border-b border-gray-800 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
                         <div className="flex items-center gap-2">
                             <Truck className="text-primary-orange" size={20} />
                             <h3 className="font-semibold text-white">Authorized Vehicles & Drivers</h3>
                         </div>
-                        <div className="flex items-center gap-2">
-                            <div className="relative">
+                        <div className="flex items-center gap-2 w-full sm:w-auto">
+                            <div className="relative flex-1 sm:flex-none">
                                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
                                 <input
                                     type="text"
                                     placeholder="Search"
-                                    className="bg-gray-900 border border-gray-700 rounded-lg pl-9 pr-4 py-1.5 text-sm text-white focus:ring-1 focus:ring-primary-orange w-48"
+                                    className="bg-gray-900 border border-gray-700 rounded-lg pl-9 pr-4 py-1.5 text-sm text-white focus:ring-1 focus:ring-primary-orange w-full sm:w-48"
                                     value={vehicleSearch}
                                     onChange={(e) => setVehicleSearch(e.target.value)}
                                 />
                             </div>
                             <button
                                 onClick={() => setShowVehicleModal(true)}
-                                className="p-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-primary-orange transition-colors"
+                                className="p-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-primary-orange transition-colors shrink-0"
                             >
                                 <Plus size={20} />
                             </button>
@@ -349,23 +349,23 @@ export default function CustomerCredits() {
 
                 {/* Transaction History */}
                 <div className="bg-card-bg rounded-xl border border-gray-800 overflow-hidden">
-                    <div className="p-4 border-b border-gray-800 flex justify-between items-center">
+                    <div className="p-4 border-b border-gray-800 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
                         <div className="flex items-center gap-2">
                             <FileText className="text-primary-orange" size={20} />
                             <h3 className="font-semibold text-white">Recent Transactions</h3>
                         </div>
-                        <div className="flex items-center gap-3">
-                            <div className="relative">
+                        <div className="flex items-center gap-3 w-full sm:w-auto">
+                            <div className="relative flex-1 sm:flex-none">
                                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
                                 <input
                                     type="text"
                                     placeholder="Search"
-                                    className="bg-gray-900 border border-gray-700 rounded-lg pl-9 pr-4 py-1.5 text-sm text-white focus:ring-1 focus:ring-primary-orange w-48"
+                                    className="bg-gray-900 border border-gray-700 rounded-lg pl-9 pr-4 py-1.5 text-sm text-white focus:ring-1 focus:ring-primary-orange w-full sm:w-48"
                                     value={transactionSearch}
                                     onChange={(e) => setTransactionSearch(e.target.value)}
                                 />
                             </div>
-                            <button onClick={generatePDF} className="flex items-center gap-2 px-3 py-1.5 bg-primary-orange text-white text-sm rounded-lg hover:bg-orange-600 transition-colors shadow-lg">
+                            <button onClick={generatePDF} className="flex items-center gap-2 px-3 py-1.5 bg-primary-orange text-white text-sm rounded-lg hover:bg-orange-600 transition-colors shadow-lg shrink-0">
                                 <Download size={16} /> Download
                             </button>
                         </div>

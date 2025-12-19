@@ -1,9 +1,10 @@
 import { useState, useEffect } from "react";
 import { db, firebaseConfig } from "../../firebase";
-import { collection, query, where, getDocs, doc, setDoc, deleteDoc, serverTimestamp, updateDoc } from "firebase/firestore";
+import { collection, query, where, getDocs, doc, setDoc, deleteDoc, serverTimestamp, updateDoc, writeBatch } from "firebase/firestore";
 import { initializeApp, deleteApp } from "firebase/app";
 import { getAuth, createUserWithEmailAndPassword, sendPasswordResetEmail, signInWithEmailAndPassword, updatePassword, signOut } from "firebase/auth";
-import { UserPlus, Trash2, Mail, Shield, User, Users, Lock, Save, X, RotateCcw, Ban, CheckCircle } from "lucide-react";
+import { UserPlus, Trash2, Mail, Shield, User, Users, Lock, Save, X, RotateCcw, Ban, CheckCircle, Download } from "lucide-react";
+import * as XLSX from "xlsx";
 
 
 
@@ -216,6 +217,106 @@ export default function AdminAccounts() {
             setMessage({ type: "error", text: "Failed to update status." });
         }
     };
+    const handleFactoryReset = async () => {
+        if (!window.confirm("⚠️ DANGER: Are you sure you want to RESET ALL DATA? This will delete all sales history, shifts, and financial records. This action CANNOT be undone.")) return;
+        if (!window.confirm("🛑 FINAL WARNING: This will permanently wipe all operational data. Accounts and Settings will be preserved. Type OK to proceed.")) return;
+
+        setLoading(true);
+        setMessage({ type: "", text: "Starting Factory Reset..." });
+
+        try {
+            const batchSize = 400; // Safe limit below 500
+            let batch = writeBatch(db);
+            let operationCount = 0;
+
+            const commitBatch = async () => {
+                if (operationCount > 0) {
+                    await batch.commit();
+                    batch = writeBatch(db);
+                    operationCount = 0;
+                }
+            };
+
+            const deleteCollection = async (collectionName) => {
+                const q = query(collection(db, collectionName));
+                const snapshot = await getDocs(q);
+                for (const docSnapshot of snapshot.docs) {
+                    batch.delete(docSnapshot.ref);
+                    operationCount++;
+                    if (operationCount >= batchSize) await commitBatch();
+                }
+            };
+
+            // 1. Delete Transactional Collections
+            const collectionsToDelete = [
+                "shift_logs",
+                "daily_sales",
+                "daily_sheets",
+                "credit_transactions",
+                "cash_transfers",
+                "expenses",
+                "vendor_payments",
+                "withdrawals" // If separate collection exists
+            ];
+
+            for (const col of collectionsToDelete) {
+                await deleteCollection(col);
+            }
+
+            // 2. Reset Users (Cash in Hand)
+            const usersSnapshot = await getDocs(collection(db, "users"));
+            for (const docSnapshot of usersSnapshot.docs) {
+                batch.update(docSnapshot.ref, { cashInHand: 0 });
+                operationCount++;
+                if (operationCount >= batchSize) await commitBatch();
+            }
+
+            // 3. Reset Customers (Balance)
+            const customersSnapshot = await getDocs(collection(db, "customers"));
+            for (const docSnapshot of customersSnapshot.docs) {
+                batch.update(docSnapshot.ref, { outstandingBalance: 0 });
+                operationCount++;
+                if (operationCount >= batchSize) await commitBatch();
+            }
+
+            // Final Commit
+            await commitBatch();
+
+            setMessage({ type: "success", text: "FACTORY RESET COMPLETE. All data has been wiped." });
+            setUsers(prev => prev.map(u => ({ ...u, cashInHand: 0 }))); // Optimistic update if needed
+            fetchUsers(); // Refresh
+        } catch (err) {
+            console.error("Error during factory reset:", err);
+            setMessage({ type: "error", text: "Factory Reset Failed: " + err.message });
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleDownloadDB = async () => {
+        setLoading(true);
+        setMessage({ type: "", text: "Preparing Backup..." });
+        try {
+            const wb = XLSX.utils.book_new();
+            const collections = ["users", "customers", "shift_logs", "daily_sales", "daily_sheets", "credit_transactions", "cash_transfers", "expenses", "tanks", "nozzles", "prices"];
+
+            for (const col of collections) {
+                const snapshot = await getDocs(collection(db, col));
+                const data = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }));
+                const ws = XLSX.utils.json_to_sheet(data);
+                XLSX.utils.book_append_sheet(wb, ws, col);
+            }
+
+            const fileName = `PetrolPump_DB_Backup_${new Date().toISOString().slice(0, 10)}.xlsx`;
+            XLSX.writeFile(wb, fileName);
+            setMessage({ type: "success", text: "Database Downloaded Successfully!" });
+        } catch (err) {
+            console.error("Export Error:", err);
+            setMessage({ type: "error", text: "Export Failed: " + err.message });
+        } finally {
+            setLoading(false);
+        }
+    };
 
     return (
         <div className="space-y-6 animate-fade-in">
@@ -223,12 +324,26 @@ export default function AdminAccounts() {
                 <h1 className="text-2xl font-bold text-white flex items-center gap-2">
                     <Users className="text-primary-orange" /> User Management
                 </h1>
-                <button
-                    onClick={() => setShowAddModal(true)}
-                    className="flex items-center gap-2 px-4 py-2 bg-primary-orange text-white rounded-lg hover:bg-orange-600 transition-colors shadow-lg"
-                >
-                    <UserPlus size={20} /> Add {activeTab}
-                </button>
+                <div>
+                    <button
+                        onClick={handleDownloadDB}
+                        className="flex items-center gap-2 px-4 py-2 border border-green-500 text-green-500 rounded-lg hover:bg-green-500/10 transition-colors mr-2 font-bold"
+                    >
+                        <Download size={18} /> Download DB
+                    </button>
+                    <button
+                        onClick={handleFactoryReset}
+                        className="flex items-center gap-2 px-4 py-2 border border-red-500 text-red-500 rounded-lg hover:bg-red-500/10 transition-colors mr-2 font-bold"
+                    >
+                        <RotateCcw size={18} /> Reset Data
+                    </button>
+                    <button
+                        onClick={() => setShowAddModal(true)}
+                        className="flex items-center gap-2 px-4 py-2 bg-primary-orange text-white rounded-lg hover:bg-orange-600 transition-colors shadow-lg inline-flex"
+                    >
+                        <UserPlus size={20} /> Add {activeTab}
+                    </button>
+                </div>
             </div>
 
             {message.text && (

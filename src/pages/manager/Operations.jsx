@@ -18,7 +18,10 @@ export default function ManagerOperations() {
         shiftCount: 0,
         totalPetrolAmount: 0,
         totalDieselAmount: 0,
-        nozzleStats: []
+        nozzleStats: [],
+        totalCash: 0,
+        totalCredit: 0,
+        totalOnline: 0
     });
     const [loading, setLoading] = useState(false);
 
@@ -127,7 +130,34 @@ export default function ManagerOperations() {
                 });
 
                 const snapshot = await getDocs(shiftsQuery);
-                const shifts = snapshot.docs.map(doc => doc.data());
+                const shifts = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+                // Map Credit Transactions to Nozzles based on Shift Timings
+                const nozzleCreditMap = {};
+                creditSnapshot.docs.forEach(doc => {
+                    const credit = doc.data();
+                    if (!credit.date) return;
+                    const creditTime = credit.date.toDate().getTime();
+
+                    // Find matching shift for this credit transaction
+                    const matchShift = shifts.find(s => {
+                        const start = s.startTime?.toDate().getTime() || 0;
+                        let end = s.endTime?.toDate().getTime();
+
+                        // If shift is still active or missing end time, assume it covers until end of selection day
+                        if (!end) {
+                            end = endOfDay.getTime();
+                        }
+
+                        // Check if transaction was logged by the attendant OF that shift AND during that shift
+                        // Adding a small buffer (e.g., 5 mins) to end time for edge cases
+                        return s.attendantId === credit.loggedBy && creditTime >= start && creditTime <= (end + 300000);
+                    });
+
+                    if (matchShift) {
+                        nozzleCreditMap[matchShift.nozzleId] = (nozzleCreditMap[matchShift.nozzleId] || 0) + (credit.amount || 0);
+                    }
+                });
 
                 // ... (Stats Calculation Logic - Same as before) ...
                 let stats = {
@@ -164,11 +194,13 @@ export default function ManagerOperations() {
                     // Aggregate Nozzle Stats
                     if (!nozzleMap[shift.nozzleId]) {
                         nozzleMap[shift.nozzleId] = {
+                            nozzleId: shift.nozzleId, // Store ID for matching
                             nozzleName: shift.nozzleName,
                             fuelType: shift.fuelType,
                             openingReading: shift.startReading,
                             closingReading: shift.endReading,
-                            totalLitres: 0
+                            totalLitres: 0,
+                            online: 0
                         };
                     }
 
@@ -185,6 +217,7 @@ export default function ManagerOperations() {
                     }
 
                     nozzleMap[shift.nozzleId].totalLitres += netLitres; // Use Net Litres
+                    nozzleMap[shift.nozzleId].online += (shift.cashOnline || 0);
 
                     // Auto-calc Financials
                     autoCash += (shift.cashReturned || 0);
@@ -202,8 +235,23 @@ export default function ManagerOperations() {
                     if (n.fuelType === "Petrol") stats.totalPetrolAmount += amount;
                     if (n.fuelType === "Diesel") stats.totalDieselAmount += amount;
 
-                    return { ...n, amount };
+                    // Add Credit and Calculate Cash
+                    const credit = nozzleCreditMap[n.nozzleId] || 0; // Use the nozzleId from the map key logic
+
+                    // Cash is the balancing figure: Total Amount - Credit - Online
+                    // Ensure we don't show negative cash if data is messy
+                    const cash = Math.max(0, amount - credit - n.online);
+
+                    return { ...n, amount, credit, cash };
                 });
+
+                // Calculate Global Totals for the new columns
+                const totalCash = stats.nozzleStats.reduce((sum, n) => sum + n.cash, 0);
+                const totalCredit = stats.nozzleStats.reduce((sum, n) => sum + n.credit, 0);
+                const totalOnline = stats.nozzleStats.reduce((sum, n) => sum + n.online, 0);
+                stats.totalCash = totalCash;
+                stats.totalCredit = totalCredit;
+                stats.totalOnline = totalOnline;
 
                 setDailyStats(stats);
 
@@ -688,18 +736,34 @@ export default function ManagerOperations() {
                             <h3 className="text-lg font-bold text-white">Daily Sales Report</h3>
 
                             {/* Amount Summary */}
-                            <div className="flex flex-wrap gap-4">
-                                <div className="bg-gray-900 px-4 py-2 rounded-lg border border-gray-700">
-                                    <span className="text-xs text-gray-400 block">Petrol Amount</span>
-                                    <span className="text-lg font-bold text-primary-orange font-mono">₹{dailyStats.totalPetrolAmount.toFixed(2)}</span>
+                            <div className="flex flex-col gap-4">
+                                <div className="flex flex-wrap gap-4">
+                                    <div className="bg-gray-900 px-4 py-2 rounded-lg border border-gray-700">
+                                        <span className="text-xs text-gray-400 block">Petrol Amount</span>
+                                        <span className="text-lg font-bold text-primary-orange font-mono">₹{dailyStats.totalPetrolAmount.toFixed(2)}</span>
+                                    </div>
+                                    <div className="bg-gray-900 px-4 py-2 rounded-lg border border-gray-700">
+                                        <span className="text-xs text-gray-400 block">Diesel Amount</span>
+                                        <span className="text-lg font-bold text-blue-500 font-mono">₹{dailyStats.totalDieselAmount.toFixed(2)}</span>
+                                    </div>
+                                    <div className="bg-gray-800 px-4 py-2 rounded-lg border border-gray-600">
+                                        <span className="text-xs text-gray-400 block">Grand Total</span>
+                                        <span className="text-xl font-bold text-green-400 font-mono">₹{(dailyStats.totalPetrolAmount + dailyStats.totalDieselAmount).toFixed(2)}</span>
+                                    </div>
                                 </div>
-                                <div className="bg-gray-900 px-4 py-2 rounded-lg border border-gray-700">
-                                    <span className="text-xs text-gray-400 block">Diesel Amount</span>
-                                    <span className="text-lg font-bold text-blue-500 font-mono">₹{dailyStats.totalDieselAmount.toFixed(2)}</span>
-                                </div>
-                                <div className="bg-gray-800 px-4 py-2 rounded-lg border border-gray-600">
-                                    <span className="text-xs text-gray-400 block">Grand Total</span>
-                                    <span className="text-xl font-bold text-green-400 font-mono">₹{(dailyStats.totalPetrolAmount + dailyStats.totalDieselAmount).toFixed(2)}</span>
+                                <div className="flex flex-wrap gap-4">
+                                    <div className="bg-gray-900/50 px-4 py-2 rounded-lg border border-gray-700 border-l-4 border-l-green-500">
+                                        <span className="text-xs text-gray-400 block">Cash (Est.)</span>
+                                        <span className="text-lg font-bold text-green-400 font-mono">₹{dailyStats.totalCash?.toFixed(2) || '0.00'}</span>
+                                    </div>
+                                    <div className="bg-gray-900/50 px-4 py-2 rounded-lg border border-gray-700 border-l-4 border-l-blue-500">
+                                        <span className="text-xs text-gray-400 block">Online</span>
+                                        <span className="text-lg font-bold text-blue-400 font-mono">₹{dailyStats.totalOnline?.toFixed(2) || '0.00'}</span>
+                                    </div>
+                                    <div className="bg-gray-900/50 px-4 py-2 rounded-lg border border-gray-700 border-l-4 border-l-orange-500">
+                                        <span className="text-xs text-gray-400 block">Credit</span>
+                                        <span className="text-lg font-bold text-orange-400 font-mono">₹{dailyStats.totalCredit?.toFixed(2) || '0.00'}</span>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -712,13 +776,16 @@ export default function ManagerOperations() {
                                         <th className="py-3 px-4 text-right">Opening Reading</th>
                                         <th className="py-3 px-4 text-right">Closing Reading</th>
                                         <th className="py-3 px-4 text-right">Sale (L)</th>
-                                        <th className="py-3 px-4 text-right">Amount (₹)</th>
+                                        <th className="py-3 px-4 text-right text-green-400">Cash (₹)</th>
+                                        <th className="py-3 px-4 text-right text-blue-400">Online (₹)</th>
+                                        <th className="py-3 px-4 text-right text-orange-400">Credit (₹)</th>
+                                        <th className="py-3 px-4 text-right">Total (₹)</th>
                                     </tr>
                                 </thead>
                                 <tbody className="text-white text-sm">
                                     {dailyStats.nozzleStats.length === 0 ? (
                                         <tr>
-                                            <td colSpan="5" className="py-8 text-center text-gray-500">No sales data for this date.</td>
+                                            <td colSpan="8" className="py-8 text-center text-gray-500">No sales data for this date.</td>
                                         </tr>
                                     ) : (
                                         dailyStats.nozzleStats.map((stat, index) => (
@@ -732,7 +799,10 @@ export default function ManagerOperations() {
                                                 <td className="py-3 px-4 text-right font-mono text-gray-300">{stat.openingReading}</td>
                                                 <td className="py-3 px-4 text-right font-mono text-gray-300">{stat.closingReading}</td>
                                                 <td className="py-3 px-4 text-right font-mono font-bold">{stat.totalLitres.toFixed(2)}</td>
-                                                <td className="py-3 px-4 text-right font-mono font-bold text-green-400">₹{stat.amount.toFixed(2)}</td>
+                                                <td className="py-3 px-4 text-right font-mono text-green-400">₹{stat.cash.toFixed(2)}</td>
+                                                <td className="py-3 px-4 text-right font-mono text-blue-400">₹{stat.online.toFixed(2)}</td>
+                                                <td className="py-3 px-4 text-right font-mono text-orange-400">₹{stat.credit.toFixed(2)}</td>
+                                                <td className="py-3 px-4 text-right font-mono font-bold text-white">₹{stat.amount.toFixed(2)}</td>
                                             </tr>
                                         ))
                                     )}

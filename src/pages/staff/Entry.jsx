@@ -206,7 +206,8 @@ export default function StaffEntry() {
                     cashToHandle: cashToHandle,
                     previousCashInHand: currentDbCash,
                     previousCashInHand: currentDbCash,
-                    status: "PendingStartVerification"
+                    status: "Active",
+                    startVerified: false
                 });
 
                 // 3. Update User Cash in Hand
@@ -401,6 +402,7 @@ export default function StaffEntry() {
         // Client-side filtering to avoid "Index Required" error
         // We fetch recent shifts (e.g., last 50) and filter
         try {
+            // 1. Fetch Shifts
             const shiftsQuery = query(
                 collection(db, "shift_logs"),
                 where("attendantId", "==", currentUser.uid),
@@ -408,20 +410,50 @@ export default function StaffEntry() {
                 limit(50)
             );
 
-            const snapshot = await getDocs(shiftsQuery);
-            const allShifts = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            // 2. Fetch Credit Transactions (Recent)
+            const creditQuery = query(
+                collection(db, "credit_transactions"),
+                where("loggedBy", "==", currentUser.uid),
+                orderBy("date", "desc"),
+                limit(50)
+            );
+
+            const [shiftsSnapshot, creditSnapshot] = await Promise.all([
+                getDocs(shiftsQuery),
+                getDocs(creditQuery)
+            ]);
+
+            const allShifts = shiftsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            const allCredits = creditSnapshot.docs.map(doc => doc.data());
 
             const selectedDateString = date.toDateString();
 
+            // Filter Shifts
             const shiftsForDate = allShifts.filter(shift => {
                 const shiftDate = shift.startTime?.toDate ? shift.startTime.toDate() : new Date(shift.startTime);
                 return shiftDate.toDateString() === selectedDateString;
             });
 
-            setSelectedDateShifts(shiftsForDate);
+            // Map Credits to Shifts
+            const shiftsWithCredit = shiftsForDate.map(shift => {
+                const start = shift.startTime?.toDate ? shift.startTime.toDate().getTime() : new Date(shift.startTime).getTime();
+                const end = shift.endTime?.toDate ? shift.endTime.toDate().getTime() : new Date().getTime(); // Assume active/ended now if no end time
+
+                const shiftCredits = allCredits.filter(c => {
+                    const cDate = c.date?.toDate ? c.date.toDate() : new Date(c.date);
+                    const cTime = cDate.getTime();
+                    // Match transaction time to Shift Window (with 5 min buffer)
+                    return cTime >= start && cTime <= (end + 300000);
+                });
+
+                const creditTotal = shiftCredits.reduce((sum, c) => sum + (parseFloat(c.amount) || 0), 0);
+                return { ...shift, creditSales: creditTotal };
+            });
+
+            setSelectedDateShifts(shiftsWithCredit);
             setShowHistoryModal(true);
         } catch (err) {
-            console.error("Error fetching shifts for date:", err);
+            console.error("Error fetching history data:", err);
             setError("Failed to load history.");
         }
     };
@@ -724,18 +756,6 @@ export default function StaffEntry() {
                         </button>
                     </div>
                 </div>
-            ) : activeShift && activeShift.status === "PendingStartVerification" ? (
-                <div className="flex flex-col items-center justify-center h-64 text-yellow-500 bg-card-bg rounded-xl border border-yellow-500/30 animate-pulse">
-                    <Clock size={48} className="mb-4" />
-                    <p className="text-lg font-bold">Waiting for Manager Approval</p>
-                    <p className="text-sm text-gray-400 mb-4">Your request to START job is pending.</p>
-                    <button
-                        onClick={handleCancelStartRequest}
-                        className="px-4 py-2 bg-red-600/20 text-red-500 rounded-lg hover:bg-red-600/30 text-sm font-bold flex items-center gap-2"
-                    >
-                        <X size={16} /> Cancel Request
-                    </button>
-                </div>
             ) : activeShift && activeShift.status === "PendingEndVerification" ? (
                 <div className="flex flex-col items-center justify-center h-64 text-blue-500 bg-card-bg rounded-xl border border-blue-500/30 animate-pulse">
                     <Clock size={48} className="mb-4" />
@@ -806,6 +826,12 @@ export default function StaffEntry() {
                                             <div className="text-right font-mono text-white">
                                                 {((shift.totalLitres || 0) - (shift.testingLitres || 0)).toFixed(2)} L
                                             </div>
+
+                                            <div className="text-gray-400">Online Sales:</div>
+                                            <div className="text-right font-mono text-blue-400">₹{shift.cashOnline || 0}</div>
+
+                                            <div className="text-gray-400">Credit Sales:</div>
+                                            <div className="text-right font-mono text-orange-400">₹{shift.creditSales || 0}</div>
 
                                             {shift.testingLitres > 0 && (
                                                 <>
