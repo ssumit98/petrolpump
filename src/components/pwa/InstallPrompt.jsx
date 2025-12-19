@@ -9,6 +9,7 @@ export default function InstallPrompt() {
         const handler = (e) => {
             // Prevent the mini-infobar from appearing on mobile
             e.preventDefault();
+            console.log("PWA: beforeinstallprompt fired");
             // Stash the event so it can be triggered later.
             setDeferredPrompt(e);
             setIsVisible(true);
@@ -20,7 +21,12 @@ export default function InstallPrompt() {
     }, []);
 
     const handleInstallClick = async () => {
-        if (!deferredPrompt) return;
+        if (!deferredPrompt) {
+            if (import.meta.env.DEV) {
+                alert("Dev Mode: Install prompt event hasn't fired yet. In production, this would only appear when the browser allows installation.");
+            }
+            return;
+        }
 
         // Show the install prompt
         deferredPrompt.prompt();
@@ -34,7 +40,11 @@ export default function InstallPrompt() {
         setIsVisible(false);
     };
 
-    if (!isVisible) return null;
+    // In development, we want to see the button to verify styling, 
+    // even if the browser doesn't think it's installable yet.
+    const showButton = isVisible || import.meta.env.DEV;
+
+    if (!showButton) return null;
 
     return (
         <div className="fixed bottom-20 right-4 z-50 animate-bounce-in">
