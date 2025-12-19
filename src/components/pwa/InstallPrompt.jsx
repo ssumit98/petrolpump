@@ -1,67 +1,69 @@
 import { useState, useEffect } from "react";
-import { Download, X } from "lucide-react";
+import { Download, X, MoreVertical, Share } from "lucide-react";
 
 export default function InstallPrompt() {
     const [deferredPrompt, setDeferredPrompt] = useState(null);
     const [isVisible, setIsVisible] = useState(false);
-    const [debugInfo, setDebugInfo] = useState({
-        secure: typeof window !== 'undefined' ? window.isSecureContext : false,
-        sw: typeof navigator !== 'undefined' && 'serviceWorker' in navigator ? 'Supported' : 'Unsupported',
-        controller: typeof navigator !== 'undefined' && navigator.serviceWorker?.controller ? 'Active' : 'None',
-        eventFired: false
-    });
+    const [showInstructions, setShowInstructions] = useState(false);
+    const [isIOS, setIsIOS] = useState(false);
 
     useEffect(() => {
+        // Check if already installed/standalone
+        const isStandalone = window.matchMedia('(display-mode: standalone)').matches ||
+            window.navigator.standalone ||
+            document.referrer.includes('android-app://');
+
+        if (isStandalone) {
+            setIsVisible(false);
+            return;
+        }
+
+        // Check if iOS (for specific instructions)
+        const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+        setIsIOS(ios);
+
+        // Show button after a delay to allow page load
+        const timer = setTimeout(() => {
+            setIsVisible(true);
+        }, 2000);
+
         const handler = (e) => {
-            // Prevent the mini-infobar from appearing on mobile
             e.preventDefault();
-            console.log("PWA: beforeinstallprompt fired");
-            setDebugInfo(prev => ({ ...prev, eventFired: true }));
-            // Stash the event so it can be triggered later.
+            console.log("PWA: Event fired");
             setDeferredPrompt(e);
+            // Ensure visible if event fires
             setIsVisible(true);
         };
 
         window.addEventListener("beforeinstallprompt", handler);
 
-        // Check SW status
-        if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.ready.then(() => {
-                setDebugInfo(prev => ({ ...prev, controller: 'Ready' }));
-            });
-        }
-
-        return () => window.removeEventListener("beforeinstallprompt", handler);
+        return () => {
+            window.removeEventListener("beforeinstallprompt", handler);
+            clearTimeout(timer);
+        };
     }, []);
 
     const handleInstallClick = async () => {
         if (!deferredPrompt) {
-            if (import.meta.env.DEV) {
-                alert("Dev Mode: Install prompt event hasn't fired yet. In production, this would only appear when the browser allows installation.");
-            }
+            // Fallback: Show instructions
+            setShowInstructions(true);
             return;
         }
 
-        // Show the install prompt
+        // Native Prompt
         deferredPrompt.prompt();
-
-        // Wait for the user to respond to the prompt
         const { outcome } = await deferredPrompt.userChoice;
-        console.log(`User response to the install prompt: ${outcome}`);
-
-        // We've used the prompt, and can't use it again, throw it away
+        console.log(`User response: ${outcome}`);
         setDeferredPrompt(null);
         setIsVisible(false);
     };
 
-    // In development, we want to see the button to verify styling, 
-    // even if the browser doesn't think it's installable yet.
-    const showButton = isVisible || import.meta.env.DEV;
+    if (!isVisible) return null;
 
-    // NOTE: Debug overlay is always visible for troubleshooting
     return (
         <>
-            {showButton && (
+            {/* Install Button */}
+            {!showInstructions && (
                 <div className="fixed bottom-20 right-4 z-50 animate-bounce-in">
                     <button
                         onClick={handleInstallClick}
@@ -87,13 +89,63 @@ export default function InstallPrompt() {
                 </div>
             )}
 
-            {/* PWA Debug Overlay - visible on Production for now */}
-            <div className="fixed bottom-4 left-4 bg-black/90 text-green-400 p-2 text-[10px] rounded z-50 font-mono pointer-events-none opacity-80 max-w-[200px]">
-                <p>Secure: {debugInfo.secure ? 'Yes' : 'No'}</p>
-                <p>SW: {debugInfo.sw} / {debugInfo.controller}</p>
-                <p>Event: {debugInfo.eventFired ? 'FIRED' : 'WAITING'}</p>
-                <p>Mode: {import.meta.env.DEV ? 'Dev' : 'Prod'}</p>
-            </div>
+            {/* Manual Install Instructions Modal */}
+            {showInstructions && (
+                <div className="fixed inset-0 z-[60] bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-4 animate-fade-in"
+                    onClick={() => setShowInstructions(false)}>
+                    <div className="bg-card-bg border border-gray-700 w-full max-w-sm rounded-t-2xl sm:rounded-2xl p-6 shadow-2xl relative"
+                        onClick={e => e.stopPropagation()}>
+
+                        <button onClick={() => setShowInstructions(false)} className="absolute top-4 right-4 text-gray-400 hover:text-white">
+                            <X size={20} />
+                        </button>
+
+                        <div className="text-center space-y-4">
+                            <div className="bg-primary-orange/20 w-16 h-16 rounded-full flex items-center justify-center mx-auto text-primary-orange">
+                                <Download size={32} />
+                            </div>
+                            <h3 className="text-xl font-bold text-white">Install App</h3>
+
+                            <p className="text-gray-300 text-sm">
+                                To install the app properly, please follow these steps:
+                            </p>
+
+                            <ol className="text-left text-sm space-y-3 bg-gray-900/50 p-4 rounded-lg">
+                                {isIOS ? (
+                                    <>
+                                        <li className="flex items-center gap-2 text-gray-300">
+                                            <span className="bg-gray-700 w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold">1</span>
+                                            Tap the <Share size={16} className="text-blue-400" /> Share button
+                                        </li>
+                                        <li className="flex items-center gap-2 text-gray-300">
+                                            <span className="bg-gray-700 w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold">2</span>
+                                            Scroll down and tap "Add to Home Screen"
+                                        </li>
+                                    </>
+                                ) : (
+                                    <>
+                                        <li className="flex items-center gap-2 text-gray-300">
+                                            <span className="bg-gray-700 w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold">1</span>
+                                            Tap the <MoreVertical size={16} className="text-gray-400" /> menu button
+                                        </li>
+                                        <li className="flex items-center gap-2 text-gray-300">
+                                            <span className="bg-gray-700 w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold">2</span>
+                                            Select "Add to Home Screen" or "Install App"
+                                        </li>
+                                    </>
+                                )}
+                            </ol>
+
+                            <button
+                                onClick={() => setShowInstructions(false)}
+                                className="w-full py-3 bg-gray-700 hover:bg-gray-600 text-white rounded-lg font-medium"
+                            >
+                                Got it
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </>
     );
 }
