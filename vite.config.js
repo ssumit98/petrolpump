@@ -12,6 +12,12 @@ export default defineConfig({
       devOptions: {
         enabled: true
       },
+      workbox: {
+        globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
+        cleanupOutdatedCaches: true,
+        clientsClaim: true,
+        skipWaiting: true
+      },
       manifest: {
         name: 'Petrol Pump Management',
         short_name: 'PetrolPump',
