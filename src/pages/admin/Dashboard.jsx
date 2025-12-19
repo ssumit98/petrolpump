@@ -3,7 +3,7 @@ import { LogOut, Fuel, Zap, Droplets } from "lucide-react";
 import PriceCard from "../../components/dashboard/PriceCard";
 import TankLevel from "../../components/dashboard/TankLevel";
 import SalesChart from "../../components/dashboard/SalesChart";
-import EmployeeTable from "../../components/dashboard/EmployeeTable";
+
 
 export default function OwnerDashboard() {
     const { logout, currentUser } = useAuth();
@@ -55,10 +55,7 @@ export default function OwnerDashboard() {
                 </div>
             </div>
 
-            {/* Employee Oversight */}
-            <section>
-                <EmployeeTable />
-            </section>
+
         </div>
     );
 }

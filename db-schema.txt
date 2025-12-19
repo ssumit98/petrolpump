@@ -1,3 +1,4 @@
+
 # Firestore Database Schema
 
 ## Collections
@@ -61,3 +62,55 @@ Document ID: Auto-generated
 - phone: string
 - creditLimit: number
 - outstandingBalance: number
+
+--------------------------------------------------
+FIREBASE SECURITY RULES (Copy and Paste into Firestore Rules Tab)
+--------------------------------------------------
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper function to check if user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Helper to get user data
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+    
+    // Helper to check if user is Owner
+    function isOwner() {
+      return isAuthenticated() && getUserData().role == 'Owner';
+    }
+
+    // Helper to check if user is Manager
+    function isManager() {
+      return isAuthenticated() && (getUserData().role == 'Manager' || getUserData().role == 'Owner');
+    }
+
+    // USERS Collection
+    // Users can read/write their own document. Owners can read all.
+    match /users/{userId} {
+      allow read, write: if isAuthenticated() && (request.auth.uid == userId || isOwner());
+    }
+
+    // DEFAULT RULE for all other collections
+    // Allow read/write if user is authenticated. 
+    // This blocks public unauthenticated access but allows your app to function.
+    match /{document=**} {
+      allow read, write: if isAuthenticated();
+    }
+  }
+}
+
+--------------------------------------------------
+IMPORTANT NOTE ON DOMAIN RESTRICTION:
+Firestore Security Rules run on the server and CANNOT restrict access by Domain (e.g., localhost, vercel.app). 
+To restrict usage to specific domains:
+1. Go to Firebase Console -> Authentication -> Settings -> Authorized Domains.
+2. Add 'petrolpump-green.vercel.app' and 'localhost'.
+3. Remove 'localhost' if you want to block local development in production (not recommended for dev).
+4. CONSIDER 'App Check' for stricter enforcement if needed.

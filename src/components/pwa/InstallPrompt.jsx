@@ -65,9 +65,9 @@ export default function InstallPrompt() {
             {/* Install Button */}
             {!showInstructions && (
                 <div className="fixed bottom-20 right-4 z-50 animate-bounce-in">
-                    <button
+                    <div
                         onClick={handleInstallClick}
-                        className="group flex items-center gap-3 bg-primary-orange text-white px-4 py-3 rounded-full shadow-2xl hover:bg-orange-600 transition-all transform hover:scale-105"
+                        className="group flex items-center gap-3 bg-primary-orange text-white px-4 py-3 rounded-full shadow-2xl hover:bg-orange-600 transition-all transform hover:scale-105 cursor-pointer"
                     >
                         <div className="bg-white/20 p-2 rounded-full">
                             <Download size={20} className="text-white" />
@@ -85,7 +85,7 @@ export default function InstallPrompt() {
                         >
                             <X size={16} />
                         </button>
-                    </button>
+                    </div>
                 </div>
             )}
 
