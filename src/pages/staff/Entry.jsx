@@ -205,7 +205,6 @@ export default function StaffEntry() {
                     startReading: nozzle.currentMeterReading,
                     cashToHandle: cashToHandle,
                     previousCashInHand: currentDbCash,
-                    previousCashInHand: currentDbCash,
                     status: "Active",
                     startVerified: false
                 });
@@ -292,7 +291,6 @@ export default function StaffEntry() {
                     nozzleName: activeShift.nozzleName,
                     fuelType: activeShift.fuelType || "Unknown", // Added fuelType
                     startReading: activeShift.startReading,
-                    endReading: endReading,
                     endReading: endReading,
                     totalLitres: totalLitres,
                     testingLitres: testingLitres, // Save testing litres
