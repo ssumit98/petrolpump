@@ -173,55 +173,78 @@ export default function ManagerOperations() {
 
                 const nozzleMap = {};
                 let autoCash = 0;
-                // let autoOnline = 0; // Online is NOT auto-calculated anymore
+                let autoPaytm = 0;
+                let autoPhonePe = 0;
                 let autoShortage = 0;
+                let autoExpenses = 0;
 
                 shifts.forEach(shift => {
-                    const totalLitres = shift.totalLitres || 0;
-                    const testingLitres = shift.testingLitres || 0;
-                    const netLitres = totalLitres - testingLitres; // Calculate Net Litres
+                    // Normalize Nozzles: Handle new multi-nozzle structure vs legacy single nozzle
+                    const shiftNozzles = shift.nozzles || [{
+                        nozzleId: shift.nozzleId,
+                        nozzleName: shift.nozzleName,
+                        fuelType: shift.fuelType,
+                        startReading: shift.startReading,
+                        endReading: shift.endReading,
+                        totalLitres: shift.totalLitres,
+                        testingLitres: shift.testingLitres
+                    }];
 
-                    stats.totalLitres += netLitres;
+                    // Financials (Session level) - used for proportional attribution
+                    // If legacy, totals are in shift root. If new, derived from nozzles or shift aggregation.
+                    const shiftTotalNet = shift.nozzles ? shiftNozzles.reduce((acc, n) => acc + (n.netLitres || ((n.totalLitres || 0) - (n.testingLitres || 0))), 0) : (shift.totalLitres - (shift.testingLitres || 0));
 
-                    // Aggregate Global Stats
-                    if (shift.fuelType === "Petrol") {
-                        stats.petrolLitres += netLitres;
-                    }
-                    if (shift.fuelType === "Diesel") {
-                        stats.dieselLitres += netLitres;
-                    }
 
-                    // Aggregate Nozzle Stats
-                    if (!nozzleMap[shift.nozzleId]) {
-                        nozzleMap[shift.nozzleId] = {
-                            nozzleId: shift.nozzleId, // Store ID for matching
-                            nozzleName: shift.nozzleName,
-                            fuelType: shift.fuelType,
-                            openingReading: shift.startReading,
-                            closingReading: shift.endReading,
-                            totalLitres: 0,
-                            online: 0
-                        };
-                    }
+                    shiftNozzles.forEach(n => {
+                        const rawLitres = n.totalLitres || (n.endReading - n.startReading);
+                        // Ensure we don't get NaN
+                        const safeRawLitres = isNaN(rawLitres) ? 0 : rawLitres;
+                        const testing = n.testingLitres || 0;
+                        const netLitres = n.netLitres !== undefined ? n.netLitres : (safeRawLitres - testing);
+                        const safeNetLitres = parseFloat(netLitres) || 0;
 
-                    // Update Min/Max Readings
-                    if (shift.startReading < nozzleMap[shift.nozzleId].openingReading) {
-                        nozzleMap[shift.nozzleId].openingReading = shift.startReading;
-                    }
-                    if (shift.endReading > nozzleMap[shift.nozzleId].closingReading) {
-                        nozzleMap[shift.nozzleId].closingReading = shift.endReading;
-                    }
+                        // Global Stats
+                        stats.totalLitres += safeNetLitres;
+                        if (n.fuelType === "Petrol") stats.petrolLitres += safeNetLitres;
+                        if (n.fuelType === "Diesel") stats.dieselLitres += safeNetLitres;
 
-                    if (shift.endReading > nozzleMap[shift.nozzleId].closingReading) {
-                        nozzleMap[shift.nozzleId].closingReading = shift.endReading;
-                    }
+                        // Aggregate Nozzle Stats
+                        if (!nozzleMap[n.nozzleId]) {
+                            nozzleMap[n.nozzleId] = {
+                                nozzleId: n.nozzleId,
+                                nozzleName: n.nozzleName,
+                                fuelType: n.fuelType,
+                                openingReading: n.startReading,
+                                closingReading: n.endReading,
+                                totalLitres: 0,
+                                online: 0
+                            };
+                        }
 
-                    nozzleMap[shift.nozzleId].totalLitres += netLitres; // Use Net Litres
-                    nozzleMap[shift.nozzleId].online += (shift.cashOnline || 0);
+                        // Update Min/Max Readings
+                        if (n.startReading < nozzleMap[n.nozzleId].openingReading) {
+                            nozzleMap[n.nozzleId].openingReading = n.startReading;
+                        }
+                        if (n.endReading > nozzleMap[n.nozzleId].closingReading) {
+                            nozzleMap[n.nozzleId].closingReading = n.endReading;
+                        }
 
-                    // Auto-calc Financials
+                        nozzleMap[n.nozzleId].totalLitres += safeNetLitres;
+
+                        // Online Attribution:
+                        // Attribute 'Online' (Active Shift level) proportionally to nozzle sales volume
+                        const ratio = shiftTotalNet > 0 ? (safeNetLitres / shiftTotalNet) : 0;
+                        const attributedOnline = (shift.cashOnline || 0) * ratio;
+
+                        nozzleMap[n.nozzleId].online += attributedOnline;
+                    });
+
+                    // Auto-calc Financials (Session level)
                     autoCash += (shift.cashReturned || 0);
-                    // Online is NOT auto-calculated anymore
+                    autoPaytm += (shift.paytm || 0);
+                    autoPhonePe += (shift.phonePe || 0);
+                    autoExpenses += (shift.expenses || 0);
+
                     if ((shift.cashRemaining || 0) < 0) {
                         autoShortage += Math.abs(shift.cashRemaining);
                     }
@@ -267,12 +290,13 @@ export default function ManagerOperations() {
                     // Auto-populate if new
                     setPayments([
                         { type: "Attendant Cash", amount: autoCash, notes: "Auto-calculated from shifts" },
-                        { type: "Paytm", amount: 0, notes: "" },
-                        { type: "PhonePe", amount: 0, notes: "" },
+                        { type: "Paytm", amount: autoPaytm, notes: "Auto-calculated from shifts" },
+                        { type: "PhonePe", amount: autoPhonePe, notes: "Auto-calculated from shifts" },
                         { type: "Credit", amount: creditTotal, notes: "Auto-calculated from transactions" }
                     ]);
                     setExpenses([
                         { type: "Shortage", amount: autoShortage, notes: "Auto-calculated from shifts", mode: "Non-Cash" },
+                        { type: "Attendant Expenses", amount: autoExpenses, notes: "Tea/Misc from shifts", mode: "Cash" },
                         ...vendorExpenses
                     ]);
                     setSheetDocId(null);

@@ -84,34 +84,62 @@ export default function ShiftVerification() {
     // Open Start Modal
     const openStartModal = (shift) => {
         setSelectedShift(shift);
+
+        // Prepare readings map
+        const nozzles = shift.nozzles || [{ nozzleId: shift.nozzleId, startReading: shift.startReading }];
+        const initialReadings = {};
+        nozzles.forEach(n => {
+            initialReadings[n.nozzleId] = { startReading: n.startReading };
+        });
+
         setEditForm({
-            startReading: shift.startReading,
+            readings: initialReadings,
             cashToHandle: shift.cashToHandle
         });
         setShowStartModal(true);
     };
 
-    // Open End Modal (Verification)
+    // Open End Modal (Approve Staff Request)
     const openEndModal = (shift) => {
         setSelectedShift(shift);
+        const nozzles = shift.nozzles || [{ nozzleId: shift.nozzleId, nozzleName: shift.nozzleName, endReading: shift.endReading, testingLitres: shift.testingLitres }];
+        const initialReadings = {};
+        nozzles.forEach(n => {
+            initialReadings[n.nozzleId] = {
+                endReading: n.endReading,
+                testingLitres: n.testingLitres
+            };
+        });
         setEditForm({
-            endReading: shift.endReading,
+            readings: initialReadings,
             cashReturned: shift.cashReturned,
-            cashOnline: shift.cashOnline,
+            cashRemaining: shift.cashRemaining,
+            paytm: shift.paytm || 0,
+            phonePe: shift.phonePe || 0,
+            expenses: shift.expenses || 0,
             change: shift.change
         });
         setShowEndModal(true);
     };
 
-    // Open Manager End Modal (Direct Action)
+    // Open Manager End Modal (Force End Active Shift)
     const openManagerEndModal = (shift) => {
         setSelectedShift(shift);
+        const nozzles = shift.nozzles || [{ nozzleId: shift.nozzleId, nozzleName: shift.nozzleName, startReading: shift.startReading }];
+        const initialReadings = {};
+        nozzles.forEach(n => {
+            initialReadings[n.nozzleId] = {
+                endReading: n.startReading, // Default to start
+                testingLitres: 0
+            };
+        });
         setEditForm({
-            endReading: shift.startReading, // Default start at current reading
-            testingLitres: 0,
-            cashReturned: 0,
-            cashOnline: 0,
-            change: 0
+            readings: initialReadings,
+            cashReturned: "",
+            paytm: "",
+            phonePe: "",
+            expenses: "",
+            change: ""
         });
         setShowManagerEndModal(true);
     };
@@ -124,7 +152,23 @@ export default function ShiftVerification() {
 
         try {
             const cashToHandle = parseFloat(editForm.cashToHandle) || 0;
-            const startReading = parseFloat(editForm.startReading);
+
+            // Re-calculate user cash:
+            const originalCashAdded = selectedShift.cashToHandle || 0;
+            const diff = cashToHandle - originalCashAdded;
+
+            // Prepare updated nozzles
+            const shiftNozzles = selectedShift.nozzles || [{ ...selectedShift }];
+            const updatedNozzles = shiftNozzles.map(n => {
+                const readingKey = n.nozzleId || n.id;
+                const newStart = parseFloat(editForm.readings[readingKey]?.startReading);
+                if (isNaN(newStart)) throw new Error(`Invalid start reading for ${n.nozzleName}`);
+                return { ...n, startReading: newStart, endReading: newStart }; // Reset endReading to match start
+            });
+
+            // Primary/Legacy Start Reading (e.g. Total or First)
+            // We just keep the legacy field as is or update it to first nozzle's.
+            const primaryStart = updatedNozzles[0].startReading;
 
             await runTransaction(db, async (transaction) => {
                 const shiftRef = doc(db, "shift_logs", selectedShift.id);
@@ -133,20 +177,20 @@ export default function ShiftVerification() {
 
                 if (!userDoc.exists()) throw new Error("User not found");
 
-                // Re-calculate user cash:
-                // We need to adjust the cash added.
-                // Original logic added 'cashToHandle' to user balance when creating the log.
-                // If manager changes it, we need to adjust the difference.
-                const originalCashAdded = selectedShift.cashToHandle || 0;
-                const diff = cashToHandle - originalCashAdded;
                 const newCashInHand = (userDoc.data().cashInHand || 0) + diff;
 
                 transaction.update(shiftRef, {
-                    // status: "Active", // Already Active
                     startVerified: true,
-                    startReading: startReading,
                     cashToHandle: cashToHandle,
-                    verifiedAt: serverTimestamp()
+                    verifiedAt: serverTimestamp(),
+
+                    // Update Nozzles
+                    nozzles: selectedShift.nozzles ? updatedNozzles : null, // Only update array if it was array
+
+                    // Legacy Support
+                    startReading: primaryStart,
+                    // If legacy shift, we also need to update root fields:
+                    ...(selectedShift.nozzles ? {} : { startReading: primaryStart })
                 });
 
                 transaction.update(userRef, {
@@ -158,7 +202,7 @@ export default function ShiftVerification() {
             setShowStartModal(false);
         } catch (err) {
             console.error("Error approving start:", err);
-            setError("Failed to approve start.");
+            setError(err.message || "Failed to approve start.");
         } finally {
             setProcessing(false);
         }
@@ -171,120 +215,161 @@ export default function ShiftVerification() {
         setError("");
 
         try {
-            const endReading = parseFloat(editForm.endReading);
+            // Prepare updated nozzles from form data
+            const shiftNozzles = selectedShift.nozzles || [{
+                nozzleId: selectedShift.nozzleId,
+                nozzleName: selectedShift.nozzleName,
+                fuelType: selectedShift.fuelType,
+                startReading: selectedShift.startReading
+            }];
+
+            const updatedNozzles = [];
+            let totalLitres = 0; // Gross litres from all nozzles
+            let totalTestingLitres = 0;
+            let totalNetLitres = 0;
+
+            for (const nozzle of shiftNozzles) {
+                const readingKey = nozzle.nozzleId || nozzle.id; // handle inconsistency
+                const inputs = editForm.readings[readingKey] || {};
+
+                const endReading = parseFloat(inputs.endReading);
+                if (isNaN(endReading)) throw new Error(`Enter end reading for ${nozzle.nozzleName}`);
+                if (endReading < nozzle.startReading) throw new Error(`End reading cannot be less than start reading for ${nozzle.nozzleName}`);
+
+                const testing = parseFloat(inputs.testingLitres) || 0;
+                const sales = endReading - nozzle.startReading;
+                const net = sales - testing;
+
+                totalLitres += sales;
+                totalTestingLitres += testing;
+                totalNetLitres += net;
+
+                updatedNozzles.push({
+                    ...nozzle,
+                    endReading,
+                    testingLitres: testing,
+                    totalLitres: sales,
+                    netLitres: net
+                });
+            }
+
+            // Financials - Updated for Splitting
             const cashReturned = parseFloat(editForm.cashReturned) || 0;
-            const cashOnline = parseFloat(editForm.cashOnline) || 0;
+            const cashRemaining = parseFloat(editForm.cashRemaining) || 0;
+            // cashOnline deprecated
+            const paytm = parseFloat(editForm.paytm) || 0;
+            const phonePe = parseFloat(editForm.phonePe) || 0;
+            const expenses = parseFloat(editForm.expenses) || 0;
             const change = parseFloat(editForm.change) || 0;
 
-            // Fetch Tank ID First (for stock adjustment)
-            const tanksQuery = query(collection(db, "tanks"), where("fuelType", "==", selectedShift.fuelType));
+            // Fetch Prices
+            const pricesSnapshot = await getDocs(collection(db, "prices"));
+            const pricesMap = {};
+            pricesSnapshot.forEach(doc => { pricesMap[doc.id] = doc.data().rate; }); // Assuming doc.id is fuelType
+
+            let expectedAmount = 0;
+            updatedNozzles.forEach(n => {
+                const price = pricesMap[n.fuelType] || 0;
+                expectedAmount += (n.netLitres * price);
+            });
+
+            // Total Deposited now includes separated payments + expenses (as it's money accounted for)
+            const totalDeposited = cashReturned + paytm + phonePe + expenses + change;
+            const shortage = expectedAmount - totalDeposited;
+
+            // Fetch Tanks
+            const neededFuelTypes = [...new Set(updatedNozzles.map(n => n.fuelType))];
+            const tanksQuery = query(collection(db, "tanks"), where("fuelType", "in", neededFuelTypes));
             const tanksSnapshot = await getDocs(tanksQuery);
-            const tankId = tanksSnapshot.empty ? null : tanksSnapshot.docs[0].id; // Assign first tank found
-
-            // Original values from the shift log (Staff's claim)
-            const originalReturned = selectedShift.cashReturned || 0;
-            const originalOnline = selectedShift.cashOnline || 0;
-            const originalChange = selectedShift.change || 0;
-            const originalRemaining = selectedShift.cashRemaining || 0;
-
-            // Calculate Adjustments (Positive diff means money goes BACK to the wallet)
-            // 1. Returned: If I returned LESS than claimed, I kept MORE.
-            const diffReturned = originalReturned - cashReturned;
-
-            // 2. Change: If I spent LESS than claimed, I kept MORE.
-            const diffChange = originalChange - change;
-
-            // 3. Online: If Online is LESS than claimed, it means it was Cash, so I have MORE.
-            const diffOnline = originalOnline - cashOnline;
-
-            const totalAdjustment = diffReturned + diffChange + diffOnline;
-            const newCashRemaining = originalRemaining + totalAdjustment;
-
-            // Recalculate derived values
-            const totalLitres = endReading - selectedShift.startReading;
+            const tanks = tanksSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
             await runTransaction(db, async (transaction) => {
+                // 1. Update Shift Log
                 const shiftRef = doc(db, "shift_logs", selectedShift.id);
-                const nozzleRef = doc(db, "nozzles", selectedShift.nozzleId);
-                const userRef = doc(db, "users", selectedShift.attendantId);
-                const userDoc = await transaction.get(userRef);
-
-                let tankRef = null;
-                let tankDoc = null;
-                if (tankId) {
-                    tankRef = doc(db, "tanks", tankId);
-                    tankDoc = await transaction.get(tankRef);
-                }
-
-                if (!userDoc.exists()) throw new Error("User not found");
-
-                // 0. Fetch Tank for Stock Adjustment (if litres changed)
-                const oldTotalLitres = selectedShift.totalLitres || (selectedShift.endReading - selectedShift.startReading);
-                const litreDiff = totalLitres - oldTotalLitres;
-
-
-
-                if (Math.abs(litreDiff) > 0.01) {
-                    // Need to find tank. We do this by query inside transaction? No, queries not supported in runTransaction easily for "find".
-                    // Best to fetch tank OUTSIDE transaction if possible, or assume 1 tank per fuel type.
-                    // We will do a query before transaction to get Tank ID.
-                }
-
-                // 1. Update Shift
                 transaction.update(shiftRef, {
                     status: "Completed",
-                    endReading: endReading,
-                    totalLitres: totalLitres,
-                    cashReturned: cashReturned,
-                    cashRemaining: newCashRemaining,
-                    cashOnline: cashOnline,
-                    change: change,
-                    verifiedAt: serverTimestamp()
+                    endVerified: true,
+                    verifiedAt: serverTimestamp(),
+
+                    // Helper aggregates
+                    totalLitres,
+                    netLitres: totalNetLitres,
+                    testingLitres: totalTestingLitres,
+                    amount: expectedAmount,
+                    shortage: shortage,
+
+                    // New Data
+                    nozzles: updatedNozzles,
+
+                    // Legacy fields update?
+                    endReading: updatedNozzles.length === 1 ? updatedNozzles[0].endReading : 0, // Keep legacy field for single nozzle
+                    totalLitres: updatedNozzles.length === 1 ? updatedNozzles[0].totalLitres : 0, // Keep legacy field for single nozzle
+
+                    cashReturned, cashRemaining, change,
+                    paytm, phonePe, expenses, // Save broken down fields
+                    cashOnline: (paytm + phonePe) // Keep legacy agg for display if needed
                 });
 
-                // 2. Update Nozzle
-                transaction.update(nozzleRef, {
-                    currentMeterReading: endReading
-                });
+                // 2. Update Nozzles
+                for (const nozzle of updatedNozzles) {
+                    const nozzleRef = doc(db, "nozzles", nozzle.nozzleId);
+                    transaction.update(nozzleRef, { currentMeterReading: nozzle.endReading });
+                }
 
-                // 3. Update User Cash
-                // We apply the adjustment to their CURRENT cash in hand
-                const currentCashInHand = userDoc.data().cashInHand || 0;
-                transaction.update(userRef, {
-                    cashInHand: currentCashInHand + totalAdjustment
-                });
+                // 3. User Cash
+                const userRef = doc(db, "users", selectedShift.attendantId);
+                // Usually verified end means shift done. User keeps 'cashRemaining'.
+                transaction.update(userRef, { cashInHand: cashRemaining });
 
-                // 4. Update Tank Stock if needed
-                if (tankRef && tankDoc && Math.abs(totalLitres - (selectedShift.totalLitres || 0)) > 0.001) {
-                    const oldLitres = selectedShift.totalLitres || 0;
-                    const diff = totalLitres - oldLitres; // Positive means we sold MORE, so Need to DEDUCT MORE.
-                    const currentStock = tankDoc.data().currentLevel || 0;
-                    transaction.update(tankRef, {
-                        currentLevel: currentStock - diff
+                // 4. Daily Sales (Granular)
+                const today = new Date().toISOString().split('T')[0];
+                for (const nozzle of updatedNozzles) {
+                    const salesRef = doc(collection(db, "daily_sales"));
+                    const price = pricesMap[nozzle.fuelType] || 0;
+                    const amount = nozzle.netLitres * price;
+
+                    transaction.set(salesRef, {
+                        date: today,
+                        attendantId: selectedShift.attendantId,
+                        attendantEmail: selectedShift.attendantName,
+                        nozzleId: nozzle.nozzleId,
+                        nozzleName: nozzle.nozzleName,
+                        fuelType: nozzle.fuelType,
+                        startReading: nozzle.startReading,
+                        endReading: nozzle.endReading,
+                        totalLitres: nozzle.totalLitres,
+                        testingLitres: nozzle.testingLitres,
+                        netLitres: nozzle.netLitres,
+                        price: price,
+                        amount: amount,
+                        timestamp: serverTimestamp()
                     });
                 }
 
-                // 4. Add to Daily Sales
-                const salesRef = doc(collection(db, "daily_sales"));
-                transaction.set(salesRef, {
-                    date: new Date().toISOString().split('T')[0],
-                    attendantId: selectedShift.attendantId,
-                    attendantEmail: selectedShift.attendantName,
-                    nozzleId: selectedShift.nozzleId,
-                    nozzleName: selectedShift.nozzleName,
-                    fuelType: selectedShift.fuelType || "Unknown",
-                    startReading: selectedShift.startReading,
-                    endReading: endReading,
-                    totalLitres: totalLitres,
-                    timestamp: serverTimestamp(),
-                });
+                // 5. Tank Stock
+                for (const tank of tanks) {
+                    // Calculate total litres for this fuel type
+                    const litreSum = updatedNozzles
+                        .filter(n => n.fuelType === tank.fuelType)
+                        .reduce((sum, n) => sum + n.totalLitres, 0);
+
+                    if (litreSum > 0) {
+                        const tankRef = doc(db, "tanks", tank.id);
+                        const tankDoc = await transaction.get(tankRef);
+                        if (tankDoc.exists()) {
+                            transaction.update(tankRef, {
+                                currentLevel: (tankDoc.data().currentLevel || 0) - litreSum
+                            });
+                        }
+                    }
+                }
             });
 
             setSuccess("Shift END approved successfully!");
             setShowEndModal(false);
         } catch (err) {
             console.error("Error approving end:", err);
-            setError("Failed to approve end.");
+            setError(err.message || "Failed to approve end.");
         } finally {
             setProcessing(false);
         }
@@ -297,42 +382,75 @@ export default function ShiftVerification() {
         setError("");
 
         try {
-            const endReading = parseFloat(editForm.endReading);
-            const testingLitres = parseFloat(editForm.testingLitres) || 0;
-            const cashReturned = parseFloat(editForm.cashReturned) || 0;
-            const cashOnline = parseFloat(editForm.cashOnline) || 0;
-            const change = parseFloat(editForm.change) || 0;
+            // Prepare updated nozzles from form data
+            const shiftNozzles = selectedShift.nozzles || [{
+                nozzleId: selectedShift.nozzleId,
+                nozzleName: selectedShift.nozzleName,
+                fuelType: selectedShift.fuelType,
+                startReading: selectedShift.startReading
+            }];
 
-            if (endReading < selectedShift.startReading) {
-                throw new Error("End reading cannot be less than start reading.");
+            const updatedNozzles = [];
+            let totalLitres = 0; // Gross litres from all nozzles
+            let totalTestingLitres = 0;
+            let totalNetLitres = 0;
+
+            for (const nozzle of shiftNozzles) {
+                const readingKey = nozzle.nozzleId || nozzle.id;
+                const inputs = editForm.readings[readingKey] || {};
+
+                const endReading = parseFloat(inputs.endReading);
+                if (isNaN(endReading)) throw new Error(`Enter end reading for ${nozzle.nozzleName}`);
+                if (endReading < nozzle.startReading) throw new Error(`End reading cannot be less than start reading for ${nozzle.nozzleName}`);
+
+                const testing = parseFloat(inputs.testingLitres) || 0;
+                const sales = endReading - nozzle.startReading;
+                const net = sales - testing;
+
+                totalLitres += sales;
+                totalTestingLitres += testing;
+                totalNetLitres += net;
+
+                updatedNozzles.push({
+                    ...nozzle,
+                    endReading,
+                    testingLitres: testing,
+                    totalLitres: sales,
+                    netLitres: net
+                });
             }
 
-            // Calculations
-            const grossLitres = endReading - selectedShift.startReading;
-            const netLitres = Math.max(0, grossLitres - testingLitres);
+            // Financials
+            const cashReturned = parseFloat(editForm.cashReturned) || 0;
+            // cashOnline deprecated
+            const paytm = parseFloat(editForm.paytm) || 0;
+            const phonePe = parseFloat(editForm.phonePe) || 0;
+            const expenses = parseFloat(editForm.expenses) || 0;
+            const change = parseFloat(editForm.change) || 0;
 
-            // Fetch Price
-            const fuelPrice = selectedShift.fuelType === "Petrol" ? prices.petrol : prices.diesel;
-            if (!fuelPrice) throw new Error("Fuel price not set. Cannot calculate sales.");
+            // Fetch Prices
+            const pricesSnapshot = await getDocs(collection(db, "prices"));
+            const pricesMap = {};
+            pricesSnapshot.forEach(doc => { pricesMap[doc.id] = doc.data().rate; }); // Assuming doc.id is fuelType
 
-            const totalAmount = netLitres * fuelPrice;
+            let expectedAmount = 0;
+            updatedNozzles.forEach(n => {
+                const price = pricesMap[n.fuelType] || 0;
+                expectedAmount += (n.netLitres * price);
+            });
 
-            // Fetch Tank ID
-            const tanksQuery = query(collection(db, "tanks"), where("fuelType", "==", selectedShift.fuelType));
+            const totalDeposited = cashReturned + paytm + phonePe + expenses + change;
+            const shortage = expectedAmount - totalDeposited;
+
+            // Fetch Tanks
+            const neededFuelTypes = [...new Set(updatedNozzles.map(n => n.fuelType))];
+            const tanksQuery = query(collection(db, "tanks"), where("fuelType", "in", neededFuelTypes));
             const tanksSnapshot = await getDocs(tanksQuery);
-            const tankId = tanksSnapshot.empty ? null : tanksSnapshot.docs[0].id;
+            const tanks = tanksSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
             await runTransaction(db, async (transaction) => {
                 const shiftRef = doc(db, "shift_logs", selectedShift.id);
-                const nozzleRef = doc(db, "nozzles", selectedShift.nozzleId);
                 const userRef = doc(db, "users", selectedShift.attendantId);
-
-                let tankRef = null;
-                let tankDoc = null;
-                if (tankId) {
-                    tankRef = doc(db, "tanks", tankId);
-                    tankDoc = await transaction.get(tankRef);
-                }
 
                 const userDoc = await transaction.get(userRef);
                 if (!userDoc.exists()) throw new Error("User not found");
@@ -341,65 +459,87 @@ export default function ShiftVerification() {
                 transaction.update(shiftRef, {
                     status: "Completed",
                     endTime: serverTimestamp(),
-                    endReading: endReading,
-                    testingLitres: testingLitres,
-                    totalLitres: netLitres,
-                    cashReturned: cashReturned,
-                    // Cash Remaining calculation:
-                    // This is for the RECORD in shift_log, usually represents what user KEPT relative to SALES.
-                    // But here Manager is deciding logic. 
-                    // Let's stick to standard formula if we want consistency: (Sales - Returned - Change)
-                    // Note: This does NOT include their start float. That's separate.
-                    cashRemaining: Math.max(0, totalAmount - cashReturned - change - cashOnline), // Approximate
-                    cashOnline: cashOnline,
-                    change: change,
+                    endVerified: true, // Manager override implies verification
                     verifiedAt: serverTimestamp(),
-                    managerEnded: true // Flag to track manager intervention
+                    managerEnded: true, // Flag to track manager intervention
+
+                    // Helper aggregates
+                    totalLitres,
+                    netLitres: totalNetLitres,
+                    testingLitres: totalTestingLitres,
+                    amount: expectedAmount,
+                    shortage: shortage,
+
+                    // New Data
+                    nozzles: updatedNozzles,
+
+                    // Legacy fields update?
+                    endReading: updatedNozzles.length === 1 ? updatedNozzles[0].endReading : 0, // Keep legacy field for single nozzle
+                    totalLitres: updatedNozzles.length === 1 ? updatedNozzles[0].totalLitres : 0, // Keep legacy field for single nozzle
+
+                    cashReturned,
+                    paytm, phonePe, expenses,
+                    change,
+                    cashOnline: (paytm + phonePe),
+                    cashRemaining: (selectedShift.cashToHandle || 0) - shortage // cash remaining update based on shortage
                 });
 
-                // 2. Update Nozzle
-                transaction.update(nozzleRef, {
-                    currentMeterReading: endReading
-                });
+                // 2. Update Nozzles
+                for (const nozzle of updatedNozzles) {
+                    const nozzleRef = doc(db, "nozzles", nozzle.nozzleId);
+                    transaction.update(nozzleRef, { currentMeterReading: nozzle.endReading });
+                }
 
                 // 3. Update User Cash
-                // Logic: Current + (SalesAmount - Returned - Change - Online)
-                // Note: Online is money NOT collected in cash.
-                const currentCashInHand = userDoc.data().cashInHand || 0;
-
-                // Effective Cash Collected = Total Sales - Online
-                const cashCollected = totalAmount - cashOnline;
-
-                // Net Change to Wallet = CashCollected - (Returned + Change)
-                const walletAdjustment = cashCollected - (cashReturned + change);
-
+                // Manager override: User's cashInHand becomes their initial float + any shortage/excess.
+                // If shortage is positive, it means they owe money, so cashInHand decreases.
+                // If shortage is negative, it means they have excess, so cashInHand increases.
+                const newCashInHand = (selectedShift.cashToHandle || 0) - shortage;
                 transaction.update(userRef, {
-                    cashInHand: currentCashInHand + walletAdjustment
+                    cashInHand: newCashInHand
                 });
 
-                // 4. Update Tank Stock
-                if (tankRef && tankDoc) {
-                    const currentStock = tankDoc.data().currentLevel || 0;
-                    transaction.update(tankRef, {
-                        currentLevel: currentStock - netLitres
+                // 4. Daily Sales (Granular)
+                const today = new Date().toISOString().split('T')[0];
+                for (const nozzle of updatedNozzles) {
+                    const salesRef = doc(collection(db, "daily_sales"));
+                    const price = pricesMap[nozzle.fuelType] || 0;
+                    const amount = nozzle.netLitres * price;
+
+                    transaction.set(salesRef, {
+                        date: today,
+                        attendantId: selectedShift.attendantId,
+                        attendantEmail: selectedShift.attendantName,
+                        nozzleId: nozzle.nozzleId,
+                        nozzleName: nozzle.nozzleName,
+                        fuelType: nozzle.fuelType,
+                        startReading: nozzle.startReading,
+                        endReading: nozzle.endReading,
+                        totalLitres: nozzle.totalLitres,
+                        testingLitres: nozzle.testingLitres,
+                        netLitres: nozzle.netLitres,
+                        price: price,
+                        amount: amount,
+                        timestamp: serverTimestamp()
                     });
                 }
 
-                // 5. Add to Daily Sales
-                const salesRef = doc(collection(db, "daily_sales"));
-                transaction.set(salesRef, {
-                    date: new Date().toISOString().split('T')[0],
-                    attendantId: selectedShift.attendantId,
-                    attendantEmail: selectedShift.attendantName,
-                    nozzleId: selectedShift.nozzleId,
-                    nozzleName: selectedShift.nozzleName,
-                    fuelType: selectedShift.fuelType || "Unknown",
-                    startReading: selectedShift.startReading,
-                    endReading: endReading,
-                    totalLitres: netLitres,
-                    amount: totalAmount, // Add amount for reference
-                    timestamp: serverTimestamp(),
-                });
+                // 5. Tank Stock
+                for (const tank of tanks) {
+                    const litreSum = updatedNozzles
+                        .filter(n => n.fuelType === tank.fuelType)
+                        .reduce((sum, n) => sum + n.totalLitres, 0);
+
+                    if (litreSum > 0) {
+                        const tankRef = doc(db, "tanks", tank.id);
+                        const tankDoc = await transaction.get(tankRef);
+                        if (tankDoc.exists()) {
+                            transaction.update(tankRef, {
+                                currentLevel: (tankDoc.data().currentLevel || 0) - litreSum
+                            });
+                        }
+                    }
+                }
             });
 
             setSuccess("Shift ENDED by Manager successfully!");
@@ -453,8 +593,16 @@ export default function ShiftVerification() {
                                 {startRequests.map(shift => (
                                     <tr key={shift.id} className="hover:bg-gray-800/30">
                                         <td className="p-3 font-bold text-white">{shift.attendantName?.split('@')[0]}</td>
-                                        <td className="p-3 text-gray-300">{shift.nozzleName}</td>
-                                        <td className="p-3 text-right font-mono text-white">{shift.startReading}</td>
+                                        <td className="p-3 text-gray-300">
+                                            {shift.nozzles
+                                                ? <span className="bg-gray-700 px-2 py-0.5 rounded text-xs">{shift.nozzles.length} Nozzles</span>
+                                                : shift.nozzleName}
+                                        </td>
+                                        <td className="p-3 text-right font-mono text-white">
+                                            {shift.nozzles
+                                                ? "Various"
+                                                : shift.startReading}
+                                        </td>
                                         <td className="p-3 text-right font-mono text-green-400">₹{shift.cashToHandle}</td>
                                         <td className="p-3 text-center">
                                             <button
@@ -499,14 +647,24 @@ export default function ShiftVerification() {
                                 {endRequests.map(shift => (
                                     <tr key={shift.id} className="hover:bg-gray-800/30">
                                         <td className="p-3 font-bold text-white">{shift.attendantName?.split('@')[0]}</td>
-                                        <td className="p-3 text-gray-300">{shift.nozzleName}</td>
-                                        <td className="p-3 text-right font-mono text-white">{shift.endReading}</td>
-                                        <td className="p-3 text-right font-mono text-white">{(shift.endReading - shift.startReading).toFixed(2)}</td>
+                                        <td className="p-3 text-gray-300">
+                                            {shift.nozzles
+                                                ? <span className="bg-gray-700 px-2 py-0.5 rounded text-xs">{shift.nozzles.length} Nozzles</span>
+                                                : shift.nozzleName}
+                                        </td>
+                                        <td className="p-3 text-right font-mono text-white">
+                                            {shift.nozzles
+                                                ? shift.nozzles.reduce((acc, n) => acc + (n.endReading || 0), 0).toFixed(2) // Total Not Meaningful really
+                                                : shift.endReading}
+                                        </td>
+                                        <td className="p-3 text-right font-mono text-blue-400">
+                                            {shift.totalLitres?.toFixed(2)} L
+                                        </td>
                                         <td className="p-3 text-right font-mono text-green-400">₹{shift.cashReturned}</td>
                                         <td className="p-3 text-center">
                                             <button
                                                 onClick={() => openEndModal(shift)}
-                                                className="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 text-xs font-bold"
+                                                className="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700 text-xs font-bold"
                                             >
                                                 Verify & End
                                             </button>
@@ -569,16 +727,26 @@ export default function ShiftVerification() {
                             <button onClick={() => setShowStartModal(false)} className="text-gray-400 hover:text-white"><X size={20} /></button>
                         </div>
                         <form onSubmit={handleApproveStart} className="p-4 space-y-4">
-                            <div>
-                                <label className="block text-sm text-gray-400 mb-1">Start Reading</label>
-                                <input
-                                    type="number"
-                                    step="0.01"
-                                    required
-                                    value={editForm.startReading}
-                                    onChange={e => setEditForm({ ...editForm, startReading: e.target.value })}
-                                    className="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white"
-                                />
+                            <div className="space-y-4 max-h-60 overflow-y-auto">
+                                {(selectedShift.nozzles || [{ nozzleId: selectedShift.nozzleId, nozzleName: selectedShift.nozzleName }]).map(n => (
+                                    <div key={n.nozzleId} className="bg-gray-800/50 p-3 rounded-lg border border-gray-700">
+                                        <label className="block text-sm text-gray-300 mb-1">{n.nozzleName} - Start Reading</label>
+                                        <input
+                                            type="number"
+                                            step="0.01"
+                                            required
+                                            value={editForm.readings?.[n.nozzleId]?.startReading || ""}
+                                            onChange={e => setEditForm(prev => ({
+                                                ...prev,
+                                                readings: {
+                                                    ...prev.readings,
+                                                    [n.nozzleId]: { ...prev.readings[n.nozzleId], startReading: e.target.value }
+                                                }
+                                            }))}
+                                            className="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white font-mono"
+                                        />
+                                    </div>
+                                ))}
                             </div>
                             <div>
                                 <label className="block text-sm text-gray-400 mb-1">Cash to Handle (₹)</label>
@@ -607,16 +775,54 @@ export default function ShiftVerification() {
                             <button onClick={() => setShowEndModal(false)} className="text-gray-400 hover:text-white"><X size={20} /></button>
                         </div>
                         <form onSubmit={handleApproveEnd} className="p-4 space-y-4">
-                            <div>
-                                <label className="block text-sm text-gray-400 mb-1">End Reading</label>
-                                <input
-                                    type="number"
-                                    step="0.01"
-                                    required
-                                    value={editForm.endReading}
-                                    onChange={e => setEditForm({ ...editForm, endReading: e.target.value })}
-                                    className="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white"
-                                />
+                            <div className="space-y-4 max-h-60 overflow-y-auto mb-4 border-b border-gray-800 pb-4">
+                                {(selectedShift.nozzles || [{
+                                    nozzleId: selectedShift.nozzleId,
+                                    nozzleName: selectedShift.nozzleName,
+                                    startReading: selectedShift.startReading
+                                }]).map(n => (
+                                    <div key={n.nozzleId} className="bg-gray-800/50 p-3 rounded-lg border border-gray-700">
+                                        <h4 className="font-bold text-primary-orange text-sm mb-2">{n.nozzleName}</h4>
+                                        <div className="flex gap-4 text-xs text-gray-500 mb-2">
+                                            <span>Start: {n.startReading}</span>
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-2">
+                                            <div>
+                                                <label className="block text-xs text-gray-400 mb-1">End Reading</label>
+                                                <input
+                                                    type="number"
+                                                    step="0.01"
+                                                    required
+                                                    className="w-full bg-gray-900 border border-gray-700 rounded p-1 text-white text-sm"
+                                                    value={editForm.readings?.[n.nozzleId]?.endReading || ""}
+                                                    onChange={e => setEditForm(prev => ({
+                                                        ...prev,
+                                                        readings: {
+                                                            ...prev.readings,
+                                                            [n.nozzleId]: { ...prev.readings[n.nozzleId], endReading: e.target.value }
+                                                        }
+                                                    }))}
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs text-gray-400 mb-1">Testing (L)</label>
+                                                <input
+                                                    type="number"
+                                                    step="0.01"
+                                                    className="w-full bg-gray-900 border border-gray-700 rounded p-1 text-white text-sm"
+                                                    value={editForm.readings?.[n.nozzleId]?.testingLitres || ""}
+                                                    onChange={e => setEditForm(prev => ({
+                                                        ...prev,
+                                                        readings: {
+                                                            ...prev.readings,
+                                                            [n.nozzleId]: { ...prev.readings[n.nozzleId], testingLitres: e.target.value }
+                                                        }
+                                                    }))}
+                                                />
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
                             </div>
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
@@ -630,25 +836,47 @@ export default function ShiftVerification() {
                                     />
                                 </div>
                                 <div>
-                                    <label className="block text-sm text-gray-400 mb-1">Cash Online</label>
+                                    <label className="block text-sm text-gray-400 mb-1">Paytm</label>
                                     <input
                                         type="number"
                                         required
-                                        value={editForm.cashOnline}
-                                        onChange={e => setEditForm({ ...editForm, cashOnline: e.target.value })}
+                                        value={editForm.paytm}
+                                        onChange={e => setEditForm({ ...editForm, paytm: e.target.value })}
                                         className="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white"
                                     />
                                 </div>
                             </div>
-                            <div>
-                                <label className="block text-sm text-gray-400 mb-1">Change / Expenses</label>
-                                <input
-                                    type="number"
-                                    required
-                                    value={editForm.change}
-                                    onChange={e => setEditForm({ ...editForm, change: e.target.value })}
-                                    className="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white"
-                                />
+                            <div className="grid grid-cols-3 gap-2">
+                                <div>
+                                    <label className="block text-sm text-gray-400 mb-1">PhonePe</label>
+                                    <input
+                                        type="number"
+                                        required
+                                        value={editForm.phonePe}
+                                        onChange={e => setEditForm({ ...editForm, phonePe: e.target.value })}
+                                        className="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm text-gray-400 mb-1">Expenses</label>
+                                    <input
+                                        type="number"
+                                        required
+                                        value={editForm.expenses}
+                                        onChange={e => setEditForm({ ...editForm, expenses: e.target.value })}
+                                        className="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm text-gray-400 mb-1">Change/Float</label>
+                                    <input
+                                        type="number"
+                                        required
+                                        value={editForm.change}
+                                        onChange={e => setEditForm({ ...editForm, change: e.target.value })}
+                                        className="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white"
+                                    />
+                                </div>
                             </div>
                             <button disabled={processing} className="w-full py-2 bg-blue-600 text-white rounded font-bold hover:bg-blue-700">
                                 {processing ? "Approving..." : "Approve & Complete"}
@@ -672,35 +900,54 @@ export default function ShiftVerification() {
                                 Warning: You are manually ending an active shift. Ensure all values are accurate as this will directly update stocks and user wallets.
                             </div>
 
-                            <div className="bg-gray-800/50 p-3 rounded-lg border border-gray-700">
-                                <span className="text-xs text-gray-500 block">Start Reading</span>
-                                <span className="text-lg font-mono font-bold text-gray-300">{selectedShift.startReading}</span>
-                            </div>
-
-                            <div>
-                                <label className="block text-sm text-gray-400 mb-1">End Reading</label>
-                                <input
-                                    type="number"
-                                    step="0.01"
-                                    required
-                                    min={selectedShift.startReading}
-                                    value={editForm.endReading}
-                                    onChange={e => setEditForm({ ...editForm, endReading: e.target.value })}
-                                    className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-primary-orange font-mono text-lg"
-                                />
-                            </div>
-
-                            <div>
-                                <label className="block text-sm text-gray-400 mb-1">Testing (Litres)</label>
-                                <input
-                                    type="number"
-                                    step="0.01"
-                                    min="0"
-                                    value={editForm.testingLitres}
-                                    onChange={e => setEditForm({ ...editForm, testingLitres: e.target.value })}
-                                    className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-primary-orange"
-                                    placeholder="0.00"
-                                />
+                            <div className="space-y-4 max-h-60 overflow-y-auto mb-4 border-b border-gray-800 pb-4">
+                                {(selectedShift.nozzles || [{
+                                    nozzleId: selectedShift.nozzleId,
+                                    nozzleName: selectedShift.nozzleName,
+                                    startReading: selectedShift.startReading
+                                }]).map(n => (
+                                    <div key={n.nozzleId} className="bg-gray-800/50 p-3 rounded-lg border border-gray-700">
+                                        <h4 className="font-bold text-primary-orange text-sm mb-2">{n.nozzleName}</h4>
+                                        <div className="flex gap-4 text-xs text-gray-500 mb-2">
+                                            <span>Start: {n.startReading}</span>
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-2">
+                                            <div>
+                                                <label className="block text-xs text-gray-400 mb-1">End Reading</label>
+                                                <input
+                                                    type="number"
+                                                    step="0.01"
+                                                    required
+                                                    className="w-full bg-gray-900 border border-gray-700 rounded p-1 text-white text-sm"
+                                                    value={editForm.readings?.[n.nozzleId]?.endReading || ""}
+                                                    onChange={e => setEditForm(prev => ({
+                                                        ...prev,
+                                                        readings: {
+                                                            ...prev.readings,
+                                                            [n.nozzleId]: { ...prev.readings[n.nozzleId], endReading: e.target.value }
+                                                        }
+                                                    }))}
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs text-gray-400 mb-1">Testing (L)</label>
+                                                <input
+                                                    type="number"
+                                                    step="0.01"
+                                                    className="w-full bg-gray-900 border border-gray-700 rounded p-1 text-white text-sm"
+                                                    value={editForm.readings?.[n.nozzleId]?.testingLitres || ""}
+                                                    onChange={e => setEditForm(prev => ({
+                                                        ...prev,
+                                                        readings: {
+                                                            ...prev.readings,
+                                                            [n.nozzleId]: { ...prev.readings[n.nozzleId], testingLitres: e.target.value }
+                                                        }
+                                                    }))}
+                                                />
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
                             </div>
 
                             <div className="grid grid-cols-2 gap-4">
@@ -715,27 +962,46 @@ export default function ShiftVerification() {
                                     />
                                 </div>
                                 <div>
-                                    <label className="block text-sm text-gray-400 mb-1">Cash Online</label>
+                                    <label className="block text-sm text-gray-400 mb-1">Paytm</label>
                                     <input
                                         type="number"
                                         required
-                                        value={editForm.cashOnline}
-                                        onChange={e => setEditForm({ ...editForm, cashOnline: e.target.value })}
+                                        value={editForm.paytm}
+                                        onChange={e => setEditForm({ ...editForm, paytm: e.target.value })}
                                         className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-primary-orange"
                                     />
                                 </div>
                             </div>
 
-                            <div>
-                                <label className="block text-sm text-gray-400 mb-1">Expenses / Change</label>
-                                <div className="relative">
-                                    <Wallet className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={18} />
+                            <div className="grid grid-cols-3 gap-2">
+                                <div>
+                                    <label className="block text-sm text-gray-400 mb-1">PhonePe</label>
+                                    <input
+                                        type="number"
+                                        required
+                                        value={editForm.phonePe}
+                                        onChange={e => setEditForm({ ...editForm, phonePe: e.target.value })}
+                                        className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-primary-orange"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm text-gray-400 mb-1">Expenses</label>
+                                    <input
+                                        type="number"
+                                        required
+                                        value={editForm.expenses}
+                                        onChange={e => setEditForm({ ...editForm, expenses: e.target.value })}
+                                        className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-primary-orange"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm text-gray-400 mb-1">Change/Float</label>
                                     <input
                                         type="number"
                                         required
                                         value={editForm.change}
                                         onChange={e => setEditForm({ ...editForm, change: e.target.value })}
-                                        className="w-full pl-10 bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-primary-orange"
+                                        className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-primary-orange"
                                     />
                                 </div>
                             </div>

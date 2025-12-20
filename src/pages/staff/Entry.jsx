@@ -36,18 +36,21 @@ export default function StaffEntry() {
 
     // Forms
     const [startForm, setStartForm] = useState({
-        nozzleId: "",
+        selectedNozzleIds: [],
         cashToHandle: "",
         previousCashInHand: "" // Will be autofilled
     });
 
     const [endForm, setEndForm] = useState({
-        endReading: "",
+        readings: {}, // Map nozzleId -> { endReading: val, testingLitres: val }
         cashReturned: "",
         cashRemaining: "",
-        cashOnline: "",
-        change: "",
-        testingLitres: "" // Added testingLitres
+        cashRemaining: "",
+        // cashOnline removed
+        paytm: "",
+        phonePe: "",
+        expenses: "", // Separate from change
+        change: ""
     });
 
     const [lendForm, setLendForm] = useState({
@@ -179,9 +182,11 @@ export default function StaffEntry() {
         setError("");
 
         try {
-            const nozzle = nozzles.find(n => n.id === startForm.nozzleId);
-            if (!nozzle) throw new Error("Invalid nozzle selected");
+            if (startForm.selectedNozzleIds.length === 0) {
+                throw new Error("Please select at least one nozzle");
+            }
 
+            const selectedNozzles = nozzles.filter(n => startForm.selectedNozzleIds.includes(n.id));
             const cashToHandle = parseFloat(startForm.cashToHandle) || 0;
 
             await runTransaction(db, async (transaction) => {
@@ -195,14 +200,34 @@ export default function StaffEntry() {
 
                 // 2. Create Shift Log
                 const shiftRef = doc(collection(db, "shift_logs"));
+
+                // Construct nozzles array for the shift
+                const shiftNozzles = selectedNozzles.map(n => ({
+                    nozzleId: n.id,
+                    nozzleName: n.nozzleName,
+                    fuelType: n.fuelType,
+                    startReading: n.currentMeterReading,
+                    endReading: n.currentMeterReading, // Init
+                    totalLitres: 0,
+                    testingLitres: 0
+                }));
+
+                const primaryNozzle = selectedNozzles[0];
+
                 transaction.set(shiftRef, {
                     attendantId: currentUser.uid,
                     attendantName: currentUser.email,
-                    nozzleId: startForm.nozzleId,
-                    nozzleName: nozzle.nozzleName,
-                    fuelType: nozzle.fuelType, // Added fuelType
                     startTime: serverTimestamp(),
-                    startReading: nozzle.currentMeterReading,
+
+                    // Legacy/Summary fields
+                    nozzleId: primaryNozzle.id,
+                    nozzleName: selectedNozzles.map(n => n.nozzleName).join(", "),
+                    fuelType: selectedNozzles.length > 1 ? "Mixed" : primaryNozzle.fuelType,
+                    startReading: primaryNozzle.currentMeterReading, // Just for summary/legacy
+
+                    // New Data Structure
+                    nozzles: shiftNozzles,
+
                     cashToHandle: cashToHandle,
                     previousCashInHand: currentDbCash,
                     status: "Active",
@@ -215,10 +240,10 @@ export default function StaffEntry() {
 
             setSuccess("Job started successfully!");
             setShowStartModal(false);
-            setStartForm({ nozzleId: "", cashToHandle: "", previousCashInHand: "" });
+            setStartForm({ selectedNozzleIds: [], cashToHandle: "", previousCashInHand: startForm.previousCashInHand });
         } catch (err) {
             console.error("Error starting job:", err);
-            setError("Failed to start job.");
+            setError(err.message || "Failed to start job.");
         } finally {
             setSubmitting(false);
         }
@@ -232,48 +257,85 @@ export default function StaffEntry() {
         setError("");
 
         try {
-            const endReading = parseFloat(endForm.endReading);
-            if (endReading < activeShift.startReading) {
-                throw new Error("End reading cannot be less than start reading.");
+            // Normalize shift nozzles (Legacy vs Multi)
+            const shiftNozzles = activeShift.nozzles || [{
+                nozzleId: activeShift.nozzleId,
+                nozzleName: activeShift.nozzleName,
+                fuelType: activeShift.fuelType,
+                startReading: activeShift.startReading
+            }];
+
+            const updatedNozzles = [];
+            let totalLitres = 0;
+            let totalTestingLitres = 0;
+
+            // Validate and prepare data
+            for (const nozzle of shiftNozzles) {
+                const readingData = endForm.readings[nozzle.nozzleId] || {};
+                const endReading = parseFloat(readingData.endReading);
+
+                if (isNaN(endReading)) throw new Error(`Enter end reading for ${nozzle.nozzleName}`);
+                if (endReading < nozzle.startReading) {
+                    throw new Error(`End reading cannot be less than start reading for ${nozzle.nozzleName}`);
+                }
+
+                const testing = parseFloat(readingData.testingLitres) || 0;
+                const nozzleSales = endReading - nozzle.startReading;
+                const netNozzleSales = nozzleSales - testing;
+
+                totalLitres += nozzleSales; // Sum of gross sales
+                totalTestingLitres += testing;
+
+                updatedNozzles.push({
+                    ...nozzle,
+                    endReading,
+                    totalLitres: nozzleSales,
+                    testingLitres: testing,
+                    netLitres: netNozzleSales
+                });
             }
 
-            const testingLitres = parseFloat(endForm.testingLitres) || 0;
-            const totalLitres = endReading - activeShift.startReading;
-            const netLitres = totalLitres - testingLitres; // Calculate net litres
+            const netLitres = totalLitres - totalTestingLitres;
             const cashRemaining = parseFloat(endForm.cashRemaining) || 0;
 
-            // Fetch Tank ID for Fuel Type
-            const tanksQuery = query(collection(db, "tanks"), where("fuelType", "==", activeShift.fuelType));
+            // Fetch tanks for all needed fuel types
+            const neededFuelTypes = [...new Set(shiftNozzles.map(n => n.fuelType))];
+            const tanksQuery = query(collection(db, "tanks"), where("fuelType", "in", neededFuelTypes));
             const tanksSnapshot = await getDocs(tanksQuery);
-            if (tanksSnapshot.empty) throw new Error(`No tank found for ${activeShift.fuelType}`);
-            const tankId = tanksSnapshot.docs[0].id;
+            const tanks = tanksSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
             await runTransaction(db, async (transaction) => {
-                // 0. READ: Get Tank Doc (Must be before writes)
-                const tankRef = doc(db, "tanks", tankId);
-                const tankDoc = await transaction.get(tankRef);
-                if (!tankDoc.exists()) throw new Error("Tank not found");
-
                 // 1. Update Shift Log
                 const shiftRef = doc(db, "shift_logs", activeShift.id);
                 transaction.update(shiftRef, {
                     endTime: serverTimestamp(),
-                    endReading: endReading,
+
+                    // Legacy Support (Use sums/aggregates)
+                    endReading: 0, // Not applicable for multi
                     totalLitres: totalLitres,
-                    netLitres: netLitres, // Save net litres
-                    testingLitres: testingLitres, // Save testing litres
+                    testingLitres: totalTestingLitres,
+                    netLitres: netLitres,
+
+                    // New Data
+                    nozzles: updatedNozzles,
+
                     cashReturned: parseFloat(endForm.cashReturned) || 0,
                     cashRemaining: cashRemaining,
-                    cashOnline: parseFloat(endForm.cashOnline) || 0,
+                    // cashOnline deprecated in favor of specific modes
+                    paytm: parseFloat(endForm.paytm) || 0,
+                    phonePe: parseFloat(endForm.phonePe) || 0,
+                    expenses: parseFloat(endForm.expenses) || 0,
                     change: parseFloat(endForm.change) || 0,
                     status: "PendingEndVerification"
                 });
 
-                // 2. Update Nozzle Reading
-                const nozzleRef = doc(db, "nozzles", activeShift.nozzleId);
-                transaction.update(nozzleRef, {
-                    currentMeterReading: endReading
-                });
+                // 2. Update Nozzles (Loop)
+                for (const nozzle of updatedNozzles) {
+                    const nozzleRef = doc(db, "nozzles", nozzle.nozzleId);
+                    transaction.update(nozzleRef, {
+                        currentMeterReading: nozzle.endReading
+                    });
+                }
 
                 // 3. Update User Cash in Hand
                 const userRef = doc(db, "users", currentUser.uid);
@@ -281,32 +343,57 @@ export default function StaffEntry() {
                     cashInHand: cashRemaining
                 });
 
-                // 4. Add to Daily Sales
-                const salesRef = doc(collection(db, "daily_sales"));
-                transaction.set(salesRef, {
-                    date: new Date().toISOString().split('T')[0],
-                    attendantId: currentUser.uid,
-                    attendantEmail: currentUser.email,
-                    nozzleId: activeShift.nozzleId,
-                    nozzleName: activeShift.nozzleName,
-                    fuelType: activeShift.fuelType || "Unknown", // Added fuelType
-                    startReading: activeShift.startReading,
-                    endReading: endReading,
-                    totalLitres: totalLitres,
-                    testingLitres: testingLitres, // Save testing litres
-                    timestamp: serverTimestamp(),
-                });
+                // 4. Add to Daily Sales (Loop per nozzle)
+                // We create separate records for reporting granularity
+                const today = new Date().toISOString().split('T')[0];
+                for (const nozzle of updatedNozzles) {
+                    const salesRef = doc(collection(db, "daily_sales"));
+                    transaction.set(salesRef, {
+                        date: today,
+                        attendantId: currentUser.uid,
+                        attendantEmail: currentUser.email,
+                        nozzleId: nozzle.nozzleId,
+                        nozzleName: nozzle.nozzleName,
+                        fuelType: nozzle.fuelType,
+                        startReading: nozzle.startReading,
+                        endReading: nozzle.endReading,
+                        totalLitres: nozzle.totalLitres, // Gross
+                        testingLitres: nozzle.testingLitres,
+                        netLitres: nozzle.netLitres,
+                        timestamp: serverTimestamp(),
+                    });
+                }
 
                 // 5. Update Tank Stock (Decrement)
-                const currentLevel = tankDoc.data().currentLevel || 0;
-                transaction.update(tankRef, {
-                    currentLevel: currentLevel - totalLitres // Total litres leaves the tank, including testing
-                });
+                // Aggregate decrement per fuel type first
+                const tankUpdates = {};
+                for (const nozzle of updatedNozzles) {
+                    if (!tankUpdates[nozzle.fuelType]) tankUpdates[nozzle.fuelType] = 0;
+                    tankUpdates[nozzle.fuelType] += nozzle.totalLitres; // Gross leaves tank
+                }
+
+                for (const [fuelType, amount] of Object.entries(tankUpdates)) {
+                    const tank = tanks.find(t => t.fuelType === fuelType);
+                    if (tank) {
+                        const tankRef = doc(db, "tanks", tank.id);
+                        // We can't trust 'tank' object in memory for transaction read consistency
+                        // But we already queried it outside transaction? 
+                        // Firebase Transaction rule: "Read before Write".
+                        // So we MUST read inside transaction.
+                        const tankDoc = await transaction.get(tankRef);
+                        if (tankDoc.exists()) {
+                            const currentLevel = tankDoc.data().currentLevel || 0;
+                            transaction.update(tankRef, {
+                                currentLevel: currentLevel - amount
+                            });
+                        }
+                    }
+                }
             });
 
             setSuccess("Job ended. Sent for verification.");
             setShowEndModal(false);
-            setEndForm({ endReading: "", cashReturned: "", cashRemaining: "", cashOnline: "", change: "", testingLitres: "" });
+            setEndForm({ readings: {}, cashReturned: "", cashRemaining: "", paytm: "", phonePe: "", expenses: "", change: "" });
         } catch (err) {
             console.error("Error ending job:", err);
             setError(err.message || "Failed to end job.");
@@ -732,18 +819,37 @@ export default function StaffEntry() {
                             <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse"></div>
                             <span className="text-green-500 font-bold tracking-wider text-sm uppercase">Job Active</span>
                         </div>
-                        <h2 className="text-2xl font-bold text-white mb-1">{activeShift.nozzleName}</h2>
-                        <p className="text-gray-400 text-sm mb-6">Started at: {activeShift.startTime?.toDate ? activeShift.startTime.toDate().toLocaleTimeString() : new Date().toLocaleTimeString()}</p>
 
-                        <div className="grid grid-cols-2 gap-4">
-                            <div className="bg-gray-900/50 p-4 rounded-lg">
-                                <span className="text-gray-500 text-xs block mb-1">Start Reading</span>
-                                <span className="text-xl font-mono font-bold text-primary-orange">{activeShift.startReading}</span>
-                            </div>
-                            <div className="bg-gray-900/50 p-4 rounded-lg">
-                                <span className="text-gray-500 text-xs block mb-1">Cash in Hand</span>
-                                <span className="text-xl font-mono font-bold text-white">₹{userCashInHand}</span>
-                            </div>
+                        {/* Nozzle List */}
+                        <div className="mb-6 space-y-3">
+                            {(activeShift.nozzles || [{
+                                nozzleName: activeShift.nozzleName,
+                                startReading: activeShift.startReading,
+                                fuelType: activeShift.fuelType
+                            }]).map((n, idx) => (
+                                <div key={idx} className="flex justify-between items-center bg-gray-900/50 p-3 rounded-lg border border-gray-800">
+                                    <div>
+                                        <h2 className="text-lg font-bold text-white">{n.nozzleName}</h2>
+                                        <span className={`text-xs px-2 py-0.5 rounded-full ${n.fuelType === 'Petrol' ? 'bg-orange-900 text-orange-200' : 'bg-blue-900 text-blue-200'}`}>
+                                            {n.fuelType}
+                                        </span>
+                                    </div>
+                                    <div className="text-right">
+                                        <span className="text-gray-500 text-xs block">Start</span>
+                                        <span className="text-lg font-mono font-bold text-primary-orange">{n.startReading}</span>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+
+                        <p className="text-gray-400 text-sm mb-6 flex items-center gap-2">
+                            <Clock size={14} />
+                            Started at: {activeShift.startTime?.toDate ? activeShift.startTime.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : new Date().toLocaleTimeString()}
+                        </p>
+
+                        <div className="bg-gray-900/50 p-4 rounded-lg">
+                            <span className="text-gray-500 text-xs block mb-1">Cash in Hand</span>
+                            <span className="text-xl font-mono font-bold text-white">₹{userCashInHand}</span>
                         </div>
 
                         <button
@@ -900,27 +1006,43 @@ export default function StaffEntry() {
                         </div>
                         <form onSubmit={handleStartJob} className="p-4 space-y-4">
                             <div>
-                                <label className="block text-sm text-gray-400 mb-1">Select Nozzle</label>
-                                <select
-                                    required
-                                    className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-primary-orange"
-                                    value={startForm.nozzleId}
-                                    onChange={e => setStartForm({ ...startForm, nozzleId: e.target.value })}
-                                >
-                                    <option value="">-- Choose Nozzle --</option>
+                                <label className="block text-sm text-gray-400 mb-2">Select Nozzles</label>
+                                <div className="space-y-2 max-h-48 overflow-y-auto bg-gray-900 border border-gray-700 rounded-lg p-3">
                                     {nozzles.map(n => (
-                                        <option key={n.id} value={n.id}>{n.nozzleName} ({n.fuelType})</option>
+                                        <div key={n.id} className="flex items-center gap-3 p-2 hover:bg-gray-800 rounded">
+                                            <input
+                                                type="checkbox"
+                                                id={`nozzle-${n.id}`}
+                                                checked={startForm.selectedNozzleIds.includes(n.id)}
+                                                onChange={(e) => {
+                                                    const checked = e.target.checked;
+                                                    setStartForm(prev => {
+                                                        const newIds = checked
+                                                            ? [...prev.selectedNozzleIds, n.id]
+                                                            : prev.selectedNozzleIds.filter(id => id !== n.id);
+                                                        return { ...prev, selectedNozzleIds: newIds };
+                                                    });
+                                                }}
+                                                className="w-5 h-5 rounded border-gray-600 bg-gray-700 text-primary-orange focus:ring-primary-orange"
+                                            />
+                                            <label htmlFor={`nozzle-${n.id}`} className="flex-1 cursor-pointer">
+                                                <div className="font-bold text-white text-sm">{n.nozzleName}</div>
+                                                <div className="flex justify-between items-center mt-1">
+                                                    <span className={`text-xs px-2 py-0.5 rounded-full ${n.fuelType === 'Petrol' ? 'bg-orange-900 text-orange-200' : 'bg-blue-900 text-blue-200'}`}>
+                                                        {n.fuelType}
+                                                    </span>
+                                                    <span className="text-xs font-mono text-gray-400">
+                                                        {n.currentMeterReading}
+                                                    </span>
+                                                </div>
+                                            </label>
+                                        </div>
                                     ))}
-                                </select>
-                            </div>
-                            {startForm.nozzleId && (
-                                <div className="bg-gray-800/50 p-3 rounded-lg border border-gray-700">
-                                    <span className="text-xs text-gray-500 block">Last Reading</span>
-                                    <span className="text-lg font-mono font-bold text-primary-orange">
-                                        {nozzles.find(n => n.id === startForm.nozzleId)?.currentMeterReading}
-                                    </span>
                                 </div>
-                            )}
+                                <p className="text-xs text-gray-500 mt-1 text-right">
+                                    {startForm.selectedNozzleIds.length} Selected
+                                </p>
+                            </div>
                             <div>
                                 <label className="block text-sm text-gray-400 mb-1">Cash to Handle (₹)</label>
                                 <input
@@ -1041,37 +1163,69 @@ export default function StaffEntry() {
                             <button onClick={() => setShowEndModal(false)} className="text-gray-400 hover:text-white"><X size={20} /></button>
                         </div>
                         <form onSubmit={handleEndJob} className="p-4 space-y-4">
-                            <div className="bg-gray-800/50 p-3 rounded-lg border border-gray-700 mb-4">
-                                <span className="text-xs text-gray-500 block">Start Reading</span>
-                                <span className="text-lg font-mono font-bold text-gray-300">{activeShift?.startReading}</span>
+
+                            {/* Nozzle Readings Inputs */}
+                            <div className="space-y-4">
+                                {(activeShift.nozzles || [{
+                                    nozzleId: activeShift.nozzleId,
+                                    nozzleName: activeShift.nozzleName,
+                                    startReading: activeShift.startReading
+                                }]).map(nozzle => (
+                                    <div key={nozzle.nozzleId} className="bg-gray-800/30 p-4 rounded-xl border border-gray-700">
+                                        <h4 className="font-bold text-primary-orange mb-3 text-sm flex justify-between">
+                                            {nozzle.nozzleName}
+                                            <span className="text-gray-500 font-normal">Start: {nozzle.startReading}</span>
+                                        </h4>
+                                        <div className="space-y-3">
+                                            <div>
+                                                <label className="block text-xs text-gray-400 mb-1">End Reading</label>
+                                                <input
+                                                    type="number"
+                                                    required
+                                                    step="0.01"
+                                                    min={nozzle.startReading}
+                                                    className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-white focus:ring-1 focus:ring-primary-orange font-mono"
+                                                    value={endForm.readings[nozzle.nozzleId]?.endReading || ""}
+                                                    onChange={e => setEndForm(prev => ({
+                                                        ...prev,
+                                                        readings: {
+                                                            ...prev.readings,
+                                                            [nozzle.nozzleId]: {
+                                                                ...prev.readings[nozzle.nozzleId],
+                                                                endReading: e.target.value
+                                                            }
+                                                        }
+                                                    }))}
+                                                    placeholder="00000.00"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs text-gray-400 mb-1">Testing (L)</label>
+                                                <input
+                                                    type="number"
+                                                    step="0.01"
+                                                    min="0"
+                                                    className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-white focus:ring-1 focus:ring-primary-orange font-mono"
+                                                    value={endForm.readings[nozzle.nozzleId]?.testingLitres || ""}
+                                                    onChange={e => setEndForm(prev => ({
+                                                        ...prev,
+                                                        readings: {
+                                                            ...prev.readings,
+                                                            [nozzle.nozzleId]: {
+                                                                ...prev.readings[nozzle.nozzleId],
+                                                                testingLitres: e.target.value
+                                                            }
+                                                        }
+                                                    }))}
+                                                    placeholder="0.00"
+                                                />
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
                             </div>
-                            <div>
-                                <label className="block text-sm text-gray-400 mb-1">End Reading</label>
-                                <input
-                                    type="number"
-                                    required
-                                    step="0.01"
-                                    min={activeShift?.startReading}
-                                    className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-primary-orange font-mono text-lg"
-                                    value={endForm.endReading}
-                                    onChange={e => setEndForm({ ...endForm, endReading: e.target.value })}
-                                    placeholder="00000.00"
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-sm text-gray-400 mb-1">Testing (Litres)</label>
-                                <input
-                                    type="number"
-                                    step="0.01"
-                                    min="0"
-                                    className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-primary-orange font-mono text-lg"
-                                    value={endForm.testingLitres}
-                                    onChange={e => setEndForm({ ...endForm, testingLitres: e.target.value })}
-                                    placeholder="0.00"
-                                />
-                                <p className="text-xs text-gray-500 mt-1">Fuel pumped for testing (returned to tank)</p>
-                            </div>
-                            <div className="grid grid-cols-2 gap-4">
+
+                            <div className="grid grid-cols-2 gap-4 pt-2 border-t border-gray-800">
                                 <div>
                                     <label className="block text-sm text-gray-400 mb-1">Cash Returned</label>
                                     <input
@@ -1095,23 +1249,56 @@ export default function StaffEntry() {
                             </div>
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
-                                    <label className="block text-sm text-gray-400 mb-1">Cash Online</label>
+                                    <label className="block text-sm text-gray-400 mb-1">Paytm Received</label>
+                                    <div className="relative">
+                                        <Wallet className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={18} />
+                                        <input
+                                            type="number"
+                                            required
+                                            value={endForm.paytm}
+                                            onChange={e => setEndForm({ ...endForm, paytm: e.target.value })}
+                                            className="w-full pl-10 bg-gray-900 border border-gray-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-primary-orange"
+                                            placeholder="0.00"
+                                        />
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="block text-sm text-gray-400 mb-1">PhonePe Received</label>
+                                    <div className="relative">
+                                        <Wallet className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={18} />
+                                        <input
+                                            type="number"
+                                            required
+                                            value={endForm.phonePe}
+                                            onChange={e => setEndForm({ ...endForm, phonePe: e.target.value })}
+                                            className="w-full pl-10 bg-gray-900 border border-gray-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-primary-orange"
+                                            placeholder="0.00"
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-sm text-gray-400 mb-1">Expenses (Tea/Misc)</label>
                                     <input
                                         type="number"
                                         required
-                                        className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-primary-orange"
-                                        value={endForm.cashOnline}
-                                        onChange={e => setEndForm({ ...endForm, cashOnline: e.target.value })}
+                                        value={endForm.expenses}
+                                        onChange={e => setEndForm({ ...endForm, expenses: e.target.value })}
+                                        className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-primary-orange"
+                                        placeholder="0.00"
                                     />
                                 </div>
                                 <div>
-                                    <label className="block text-sm text-gray-400 mb-1">Change</label>
+                                    <label className="block text-sm text-gray-400 mb-1">Change Given / Float</label>
                                     <input
                                         type="number"
                                         required
-                                        className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-primary-orange"
                                         value={endForm.change}
                                         onChange={e => setEndForm({ ...endForm, change: e.target.value })}
+                                        className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-primary-orange"
+                                        placeholder="0.00"
                                     />
                                 </div>
                             </div>
