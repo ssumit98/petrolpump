@@ -284,7 +284,17 @@ export default function ShiftVerification() {
             const tanks = tanksSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
             await runTransaction(db, async (transaction) => {
-                // 1. Update Shift Log
+                // 1. READ: Get Tanks First
+                const tankMap = {};
+                for (const t of tanks) {
+                    const tankRef = doc(db, "tanks", t.id);
+                    const tankDoc = await transaction.get(tankRef);
+                    if (tankDoc.exists()) {
+                        tankMap[t.fuelType] = { ref: tankRef, data: tankDoc.data() };
+                    }
+                }
+
+                // 2. WRITE: Update Shift Log
                 const shiftRef = doc(db, "shift_logs", selectedShift.id);
                 transaction.update(shiftRef, {
                     status: "Completed",
@@ -346,21 +356,17 @@ export default function ShiftVerification() {
                     });
                 }
 
-                // 5. Tank Stock
+                // 6. WRITE: Tank Stock
                 for (const tank of tanks) {
-                    // Calculate total litres for this fuel type
                     const litreSum = updatedNozzles
                         .filter(n => n.fuelType === tank.fuelType)
                         .reduce((sum, n) => sum + n.totalLitres, 0);
 
-                    if (litreSum > 0) {
-                        const tankRef = doc(db, "tanks", tank.id);
-                        const tankDoc = await transaction.get(tankRef);
-                        if (tankDoc.exists()) {
-                            transaction.update(tankRef, {
-                                currentLevel: (tankDoc.data().currentLevel || 0) - litreSum
-                            });
-                        }
+                    if (litreSum > 0 && tankMap[tank.fuelType]) {
+                        const { ref, data } = tankMap[tank.fuelType];
+                        transaction.update(ref, {
+                            currentLevel: (data.currentLevel || 0) - litreSum
+                        });
                     }
                 }
             });
@@ -449,63 +455,62 @@ export default function ShiftVerification() {
             const tanks = tanksSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
             await runTransaction(db, async (transaction) => {
+                // 1. READ: Get User & Tanks First
                 const shiftRef = doc(db, "shift_logs", selectedShift.id);
                 const userRef = doc(db, "users", selectedShift.attendantId);
 
                 const userDoc = await transaction.get(userRef);
                 if (!userDoc.exists()) throw new Error("User not found");
 
-                // 1. Update Shift Log
+                const tankMap = {};
+                for (const t of tanks) {
+                    const tankRef = doc(db, "tanks", t.id);
+                    const tankDoc = await transaction.get(tankRef);
+                    if (tankDoc.exists()) {
+                        tankMap[t.fuelType] = { ref: tankRef, data: tankDoc.data() };
+                    }
+                }
+
+                // 2. WRITE: Update Shift Log
                 transaction.update(shiftRef, {
                     status: "Completed",
                     endTime: serverTimestamp(),
-                    endVerified: true, // Manager override implies verification
+                    endVerified: true,
                     verifiedAt: serverTimestamp(),
-                    managerEnded: true, // Flag to track manager intervention
-
-                    // Helper aggregates
+                    managerEnded: true,
                     totalLitres,
                     netLitres: totalNetLitres,
                     testingLitres: totalTestingLitres,
                     amount: expectedAmount,
                     shortage: shortage,
-
-                    // New Data
                     nozzles: updatedNozzles,
-
-                    // Legacy fields update?
-                    endReading: updatedNozzles.length === 1 ? updatedNozzles[0].endReading : 0, // Keep legacy field for single nozzle
-                    totalLitres: updatedNozzles.length === 1 ? updatedNozzles[0].totalLitres : 0, // Keep legacy field for single nozzle
-
+                    endReading: updatedNozzles.length === 1 ? updatedNozzles[0].endReading : 0,
+                    totalLitres: updatedNozzles.length === 1 ? updatedNozzles[0].totalLitres : 0,
                     cashReturned,
                     paytm, phonePe, expenses,
                     change,
                     cashOnline: (paytm + phonePe),
-                    cashRemaining: (selectedShift.cashToHandle || 0) - shortage // cash remaining update based on shortage
+                    cashRemaining: (selectedShift.cashToHandle || 0) - shortage
                 });
 
-                // 2. Update Nozzles
+                // 3. WRITE: Update Nozzles
                 for (const nozzle of updatedNozzles) {
                     const nozzleRef = doc(db, "nozzles", nozzle.nozzleId);
                     transaction.update(nozzleRef, { currentMeterReading: nozzle.endReading });
                 }
 
-                // 3. Update User Cash
-                // Manager override: User's cashInHand becomes their initial float + any shortage/excess.
-                // If shortage is positive, it means they owe money, so cashInHand decreases.
-                // If shortage is negative, it means they have excess, so cashInHand increases.
+                // 4. WRITE: Update User Cash
                 const newCashInHand = (selectedShift.cashToHandle || 0) - shortage;
                 transaction.update(userRef, {
                     cashInHand: newCashInHand
                 });
 
-                // 4. Daily Sales (Granular)
+                // 5. WRITE: Daily Sales
                 const today = new Date().toISOString().split('T')[0];
                 for (const nozzle of updatedNozzles) {
                     const salesRef = doc(collection(db, "daily_sales"));
                     const price = pricesMap[nozzle.fuelType] || 0;
                     const amount = nozzle.netLitres * price;
-
                     transaction.set(salesRef, {
                         date: today,
                         attendantId: selectedShift.attendantId,
@@ -524,20 +529,17 @@ export default function ShiftVerification() {
                     });
                 }
 
-                // 5. Tank Stock
+                // 6. WRITE: Tank Stock
                 for (const tank of tanks) {
                     const litreSum = updatedNozzles
                         .filter(n => n.fuelType === tank.fuelType)
                         .reduce((sum, n) => sum + n.totalLitres, 0);
 
-                    if (litreSum > 0) {
-                        const tankRef = doc(db, "tanks", tank.id);
-                        const tankDoc = await transaction.get(tankRef);
-                        if (tankDoc.exists()) {
-                            transaction.update(tankRef, {
-                                currentLevel: (tankDoc.data().currentLevel || 0) - litreSum
-                            });
-                        }
+                    if (litreSum > 0 && tankMap[tank.fuelType]) {
+                        const { ref, data } = tankMap[tank.fuelType];
+                        transaction.update(ref, {
+                            currentLevel: (data.currentLevel || 0) - litreSum
+                        });
                     }
                 }
             });
