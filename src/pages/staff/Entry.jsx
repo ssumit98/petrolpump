@@ -305,7 +305,17 @@ export default function StaffEntry() {
             const tanks = tanksSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
             await runTransaction(db, async (transaction) => {
-                // 1. Update Shift Log
+                // 1. READ: Get Tanks first (Rule: Reads before Writes)
+                const tankMap = {};
+                for (const t of tanks) {
+                    const tankRef = doc(db, "tanks", t.id);
+                    const tankDoc = await transaction.get(tankRef);
+                    if (tankDoc.exists()) {
+                        tankMap[t.fuelType] = { ref: tankRef, data: tankDoc.data() };
+                    }
+                }
+
+                // 2. WRITE: Update Shift Log
                 const shiftRef = doc(db, "shift_logs", activeShift.id);
                 transaction.update(shiftRef, {
                     endTime: serverTimestamp(),
@@ -329,7 +339,7 @@ export default function StaffEntry() {
                     status: "PendingEndVerification"
                 });
 
-                // 2. Update Nozzles (Loop)
+                // 3. WRITE: Update Nozzles (Loop)
                 for (const nozzle of updatedNozzles) {
                     const nozzleRef = doc(db, "nozzles", nozzle.nozzleId);
                     transaction.update(nozzleRef, {
@@ -337,14 +347,13 @@ export default function StaffEntry() {
                     });
                 }
 
-                // 3. Update User Cash in Hand
+                // 4. WRITE: Update User Cash in Hand
                 const userRef = doc(db, "users", currentUser.uid);
                 transaction.update(userRef, {
                     cashInHand: cashRemaining
                 });
 
-                // 4. Add to Daily Sales (Loop per nozzle)
-                // We create separate records for reporting granularity
+                // 5. WRITE: Add to Daily Sales (Loop per nozzle)
                 const today = new Date().toISOString().split('T')[0];
                 for (const nozzle of updatedNozzles) {
                     const salesRef = doc(collection(db, "daily_sales"));
@@ -364,7 +373,7 @@ export default function StaffEntry() {
                     });
                 }
 
-                // 5. Update Tank Stock (Decrement)
+                // 6. WRITE: Update Tank Stock (Decrement)
                 // Aggregate decrement per fuel type first
                 const tankUpdates = {};
                 for (const nozzle of updatedNozzles) {
@@ -373,20 +382,12 @@ export default function StaffEntry() {
                 }
 
                 for (const [fuelType, amount] of Object.entries(tankUpdates)) {
-                    const tank = tanks.find(t => t.fuelType === fuelType);
-                    if (tank) {
-                        const tankRef = doc(db, "tanks", tank.id);
-                        // We can't trust 'tank' object in memory for transaction read consistency
-                        // But we already queried it outside transaction? 
-                        // Firebase Transaction rule: "Read before Write".
-                        // So we MUST read inside transaction.
-                        const tankDoc = await transaction.get(tankRef);
-                        if (tankDoc.exists()) {
-                            const currentLevel = tankDoc.data().currentLevel || 0;
-                            transaction.update(tankRef, {
-                                currentLevel: currentLevel - amount
-                            });
-                        }
+                    if (tankMap[fuelType]) {
+                        const { ref, data } = tankMap[fuelType];
+                        const currentLevel = data.currentLevel || 0;
+                        transaction.update(ref, {
+                            currentLevel: currentLevel - amount
+                        });
                     }
                 }
             });
@@ -753,6 +754,13 @@ export default function StaffEntry() {
                     >
                         <ArrowRightLeft size={18} /> Lend
                     </button>
+                    <button
+                        onClick={() => setShowCreditModal(true)}
+                        className="flex items-center gap-2 px-3 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 font-bold shadow-lg"
+                        title="Log Credit Sale"
+                    >
+                        <CreditCard size={18} /> Credit
+                    </button>
 
                     {!activeShift ? (
                         <button
@@ -852,12 +860,7 @@ export default function StaffEntry() {
                             <span className="text-xl font-mono font-bold text-white">₹{userCashInHand}</span>
                         </div>
 
-                        <button
-                            onClick={() => setShowCreditModal(true)}
-                            className="w-full mt-6 py-3 bg-blue-600/20 text-blue-400 border border-blue-500/50 rounded-lg font-bold hover:bg-blue-600/30 transition-colors flex items-center justify-center gap-2"
-                        >
-                            <CreditCard size={20} /> Log Credit Sale
-                        </button>
+
                     </div>
                 </div>
             ) : activeShift && activeShift.status === "PendingEndVerification" ? (
