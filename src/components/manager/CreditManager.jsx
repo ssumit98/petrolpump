@@ -335,7 +335,7 @@ export default function CreditManager() {
                 phone: newCustomer.phone,
                 creditLimit: parseFloat(newCustomer.creditLimit),
                 outstandingBalance: 0,
-                role: "CreditCustomer",
+                role: "Customer",
                 createdAt: serverTimestamp(),
                 vehicles: [
                     {
@@ -350,7 +350,7 @@ export default function CreditManager() {
             await setDoc(doc(db, "customers", user.uid), customerData);
             await setDoc(doc(db, "users", user.uid), {
                 email: newCustomer.email,
-                role: "CreditCustomer",
+                role: "Customer",
                 name: newCustomer.name
             });
 

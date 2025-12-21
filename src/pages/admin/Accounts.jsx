@@ -40,15 +40,15 @@ export default function AdminAccounts() {
     async function fetchUsers() {
         setLoading(true);
         try {
-            let roleToFetch = activeTab === "Staff" ? "PumpAttendant" : activeTab;
+            let q;
+            if (activeTab === "Customer") {
+                // Fetch both "Customer" and "CreditCustomer" roles
+                q = query(collection(db, "users"), where("role", "in", ["Customer", "CreditCustomer"]));
+            } else {
+                let roleToFetch = activeTab === "Staff" ? "PumpAttendant" : activeTab;
+                q = query(collection(db, "users"), where("role", "==", roleToFetch));
+            }
 
-            // For Customer, we need to handle if they are in 'users' or 'customers' collection
-            // But for Admin management, we primarily want 'users' (Auth accounts)
-            // If Customers are NOT in users, we can't manage their login here easily.
-            // Assumption: We will ensure creation puts them in 'users'. 
-            // Existing customers might be missing if only in 'customers' collection.
-
-            const q = query(collection(db, "users"), where("role", "==", roleToFetch));
             const snapshot = await getDocs(q);
             setUsers(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
         } catch (err) {

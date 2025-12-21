@@ -624,7 +624,19 @@ export default function StaffEntry() {
                 fuelType: "Unknown"
             };
 
-            if (customer.vehicles) {
+            if (creditForm.vehicleNumber === "GENERIC_PETROL") {
+                vehicleDetails = {
+                    vehicleNumber: "---",
+                    vehicleModel: "---",
+                    fuelType: "Petrol"
+                };
+            } else if (creditForm.vehicleNumber === "GENERIC_DIESEL") {
+                vehicleDetails = {
+                    vehicleNumber: "---",
+                    vehicleModel: "---",
+                    fuelType: "Diesel"
+                };
+            } else if (customer.vehicles) {
                 const foundVehicle = customer.vehicles.find(v => {
                     const plate = typeof v === 'object' ? v.plateNumber : v;
                     return plate === creditForm.vehicleNumber;
@@ -901,54 +913,62 @@ export default function StaffEntry() {
     return (
         <div className="min-h-screen bg-dark-bg text-white p-4 pb-20 relative">
             {/* Header */}
-            <div className="flex justify-between items-center mb-6">
-                <div>
+            <div className="flex flex-col gap-4 mb-6">
+                {/* Top Row: Welcome & Logout */}
+                <div className="flex justify-between items-start">
                     <h1 className="text-xl font-bold text-primary-orange">Welcome, {currentUser.displayName || currentUser.email.split('@')[0]}</h1>
-                    <div className="flex items-center gap-2 mt-1">
-                        <Wallet size={14} className="text-green-500" />
-                        <span className="text-sm font-bold text-white">₹{userCashInHand}</span>
-                    </div>
-                </div>
-                <div className="flex items-center gap-2">
-                    <button
-                        onClick={() => setShowStatsModal(true)}
-                        className="p-2 bg-gray-800 text-primary-orange rounded-lg hover:bg-gray-700 transition-colors"
-                        title="Monthly Stats"
-                    >
-                        <Calculator size={20} />
-                    </button>
-                    <button
-                        onClick={() => setShowLendModal(true)}
-                        className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-bold shadow-lg"
-                    >
-                        <ArrowRightLeft size={18} /> Lend
-                    </button>
-                    <button
-                        onClick={() => setShowCreditModal(true)}
-                        className="flex items-center gap-2 px-3 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 font-bold shadow-lg"
-                        title="Log Credit Sale"
-                    >
-                        <CreditCard size={18} /> Credit
-                    </button>
-
-                    {!activeShift ? (
-                        <button
-                            onClick={() => setShowStartModal(true)}
-                            className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 font-bold shadow-lg animate-pulse"
-                        >
-                            <Play size={18} /> Start Job
-                        </button>
-                    ) : activeShift.status === "Active" ? (
-                        <button
-                            onClick={() => setShowEndModal(true)}
-                            className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 font-bold shadow-lg"
-                        >
-                            <Square size={18} /> End Job
-                        </button>
-                    ) : null}
                     <button onClick={logout} className="p-2 bg-red-600/20 text-red-500 rounded-lg hover:bg-red-600/30 transition-colors">
                         <LogOut size={20} />
                     </button>
+                </div>
+
+                {/* Second Row: Controls & Stats */}
+                <div className="flex flex-wrap items-center gap-3">
+                    {/* Cash Display */}
+                    <div className="flex items-center gap-2 mr-auto bg-gray-800/50 px-3 py-2 rounded-lg border border-gray-700">
+                        <Wallet size={16} className="text-green-500" />
+                        <span className="text-sm font-bold text-white">₹{userCashInHand}</span>
+                    </div>
+
+                    {/* Action Buttons */}
+                    <div className="flex items-center gap-2 flex-wrap">
+                        <button
+                            onClick={() => setShowStatsModal(true)}
+                            className="p-2 bg-gray-800 text-primary-orange rounded-lg hover:bg-gray-700 transition-colors"
+                            title="Monthly Stats"
+                        >
+                            <Calculator size={20} />
+                        </button>
+                        <button
+                            onClick={() => setShowLendModal(true)}
+                            className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-bold shadow-lg text-sm"
+                        >
+                            <ArrowRightLeft size={16} /> Lend
+                        </button>
+                        <button
+                            onClick={() => setShowCreditModal(true)}
+                            className="flex items-center gap-2 px-3 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 font-bold shadow-lg text-sm"
+                            title="Log Credit Sale"
+                        >
+                            <CreditCard size={16} /> Credit
+                        </button>
+
+                        {!activeShift ? (
+                            <button
+                                onClick={() => setShowStartModal(true)}
+                                className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 font-bold shadow-lg animate-pulse text-sm"
+                            >
+                                <Play size={16} /> Start Job
+                            </button>
+                        ) : activeShift.status === "Active" ? (
+                            <button
+                                onClick={() => setShowEndModal(true)}
+                                className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 font-bold shadow-lg text-sm"
+                            >
+                                <Square size={16} /> End Job
+                            </button>
+                        ) : null}
+                    </div>
                 </div>
             </div>
 
@@ -1272,7 +1292,7 @@ export default function StaffEntry() {
 
                             {creditForm.customerId && (
                                 <>
-                                    <div className="bg-gray-800/50 p-3 rounded-lg border border-gray-700 flex justify-between items-center">
+                                    {/* <div className="bg-gray-800/50 p-3 rounded-lg border border-gray-700 flex justify-between items-center">
                                         <span className="text-xs text-gray-500">Available Limit</span>
                                         <span className={`font-bold ${(customers.find(c => c.id === creditForm.customerId)?.creditLimit || 0) - (customers.find(c => c.id === creditForm.customerId)?.outstandingBalance || 0) < 1000
                                             ? 'text-red-500'
@@ -1280,7 +1300,7 @@ export default function StaffEntry() {
                                             }`}>
                                             ₹{((customers.find(c => c.id === creditForm.customerId)?.creditLimit || 0) - (customers.find(c => c.id === creditForm.customerId)?.outstandingBalance || 0)).toLocaleString()}
                                         </span>
-                                    </div>
+                                    </div> */}
 
                                     <div>
                                         <label className="block text-sm text-gray-400 mb-1">Select Vehicle</label>
@@ -1298,6 +1318,9 @@ export default function StaffEntry() {
                                                     const model = typeof v === 'object' ? v.vehicleModel : '';
                                                     return <option key={idx} value={plate}>{plate} {model ? `- ${model}` : ''}</option>;
                                                 })}
+                                                <option disabled>──────────</option>
+                                                <option value="GENERIC_PETROL">Petrol (Unregistered)</option>
+                                                <option value="GENERIC_DIESEL">Diesel (Unregistered)</option>
                                             </select>
                                         </div>
                                     </div>
