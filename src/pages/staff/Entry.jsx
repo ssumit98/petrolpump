@@ -706,12 +706,49 @@ export default function StaffEntry() {
         setShowCamera(true);
     };
 
+    const handleUserMedia = useCallback((stream) => {
+        // Attempt to apply 2x zoom if supported
+        const [track] = stream.getVideoTracks();
+        if (track) {
+            const capabilities = track.getCapabilities();
+            if (capabilities.zoom) {
+                track.applyConstraints({
+                    advanced: [{ zoom: 2 }]
+                }).catch(e => console.log("Zoom not supported", e));
+            }
+        }
+    }, []);
+
     const handleCameraCapture = useCallback(() => {
         const imageSrc = webcamRef.current.getScreenshot();
         if (imageSrc) {
-            setOcrImage(imageSrc);
-            setShowCamera(false);
-            processOcr(imageSrc);
+            // Crop the image to the center horizontal strip
+            const img = new Image();
+            img.src = imageSrc;
+            img.onload = () => {
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+
+                // Define Crop Area (matches CSS overlay)
+                // Assuming standard aspect ratio, we want a horizontal strip in the middle
+                // 100% width, but only middle 25% height (approx)
+
+                const cropWidth = img.width;
+                const cropHeight = img.height * 0.25; // 25% height
+                const cropX = 0;
+                const cropY = (img.height - cropHeight) / 2;
+
+                canvas.width = cropWidth;
+                canvas.height = cropHeight;
+
+                ctx.drawImage(img, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+
+                const croppedImage = canvas.toDataURL('image/jpeg');
+
+                setOcrImage(croppedImage);
+                setShowCamera(false);
+                processOcr(croppedImage);
+            };
         }
     }, [webcamRef]);
 
@@ -740,7 +777,7 @@ export default function StaffEntry() {
 
             console.log("Detected Lines:", lines);
 
-            // --- Sandwich Strategy (Adapted for Tesseract) ---
+            // Updated Strategy: Look strictly BELOW "CumVolume" or "CumSale"
             const extractCleanNumber = (str) => {
                 if (!str) return null;
                 // Remove non-numeric/dot/space chars
@@ -754,47 +791,40 @@ export default function StaffEntry() {
             const normalizedLines = lines.map(l => l.toLowerCase().replace(/[^a-z0-9]/g, ''));
             let targetValue = null;
 
-            // Strategy 1: Bottom-Up Anchor ("CumSale")
-            // Find "CumSale" index
-            const saleIndex = normalizedLines.findIndex(l => l.includes("cumsale") || l.includes("cumbale") || (l.includes("sale") && l.length > 10));
+            // Find index of keyword
+            const keywordIndex = normalizedLines.findIndex(l =>
+                l.includes("cumvol") ||
+                l.includes("totalvol") ||
+                l.includes("cumsale") ||
+                l.includes("cumbale")
+            );
 
-            if (saleIndex > 0) {
-                // Check line immediately above
-                const candidateLine = lines[saleIndex - 1];
-                console.log("Found Sale Anchor at index " + saleIndex + ". Checking line above:", candidateLine);
+            if (keywordIndex !== -1 && keywordIndex + 1 < lines.length) {
+                console.log(`Found keyword at index ${keywordIndex}: ${lines[keywordIndex]}`);
+                // Check the line IMMEDIATELY BELOW
+                const candidateLine = lines[keywordIndex + 1];
                 targetValue = extractCleanNumber(candidateLine);
 
-                // If not found, check 2 lines above (maybe a noise line in between?)
-                if (!targetValue && saleIndex - 2 >= 0) {
-                    targetValue = extractCleanNumber(lines[saleIndex - 2]);
+                // Fallback: Check 2 lines below (in case of empty line or noise)
+                if (!targetValue && keywordIndex + 2 < lines.length) {
+                    targetValue = extractCleanNumber(lines[keywordIndex + 2]);
                 }
             }
 
-            // Strategy 2: Top-Down Anchor ("CumVolume" or "Total Volume")
-            if (!targetValue) {
-                const volIndex = normalizedLines.findIndex(l => l.includes("cumvol") || l.includes("totalvol"));
-                if (volIndex !== -1) {
-                    console.log("Found Volume Anchor at index " + volIndex);
-                    // Check SAME line (often "Cum Volume: 1234.56")
-                    targetValue = extractCleanNumber(lines[volIndex]);
-                    // Check NEXT line
-                    if (!targetValue && volIndex + 1 < lines.length) {
-                        targetValue = extractCleanNumber(lines[volIndex + 1]);
-                    }
-                }
+            // Fallback: If no value found below, maybe it's on the same line?
+            if (!targetValue && keywordIndex !== -1) {
+                targetValue = extractCleanNumber(lines[keywordIndex]);
             }
 
             if (targetValue) {
                 setOcrResult(targetValue);
-                // Auto-fill active field if available
-                // (Optional: Logic to auto-fill specific nozzle could go here)
             } else {
-                setOcrResult("Could not auto-detect 'CumVolume'. Please enter manually.");
+                setOcrResult("Not Found");
             }
 
         } catch (err) {
             console.error("OCR Error:", err);
-            setOcrResult("Failed to scan image.");
+            setOcrResult("Error");
         } finally {
             setOcrProcessing(false);
         }
@@ -1572,11 +1602,16 @@ export default function StaffEntry() {
                             ref={webcamRef}
                             screenshotFormat="image/jpeg"
                             videoConstraints={{ facingMode }}
+                            onUserMedia={handleUserMedia}
                             className="w-full h-full object-cover"
                         />
                         {/* Scan Guide Overlay */}
-                        <div className="absolute inset-0 border-2 border-primary-orange/50 pointer-events-none m-8 rounded-lg flex items-center justify-center">
-                            <p className="text-primary-orange/80 text-sm bg-black/60 px-2 py-1 rounded">Align 'CumVolume' here</p>
+                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                            <div className="w-full max-w-lg h-32 border-2 border-primary-orange/70 bg-transparent rounded-lg relative">
+                                <p className="absolute -top-8 left-1/2 -translate-x-1/2 text-primary-orange/80 text-sm bg-black/60 px-2 py-1 rounded whitespace-nowrap">
+                                    Align 'CumVolume' here
+                                </p>
+                            </div>
                         </div>
                     </div>
                     <div className="p-6 bg-black flex justify-around items-center">
