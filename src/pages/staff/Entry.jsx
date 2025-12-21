@@ -1,8 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { useAuth } from "../../contexts/AuthContext";
-import { db } from "../../firebase";
-import { collection, getDocs, addDoc, updateDoc, doc, serverTimestamp, query, where, orderBy, limit, runTransaction, onSnapshot } from "firebase/firestore";
-import { LogOut, Fuel, Save, Calculator, AlertCircle, Mic, Play, Square, Clock, Wallet, X, ArrowRightLeft, Check, User, Calendar as CalendarIcon, CreditCard, Truck } from "lucide-react";
+import { db, auth } from "../../firebase";
+import { collection, getDocs, addDoc, updateDoc, doc, serverTimestamp, query, where, orderBy, limit, runTransaction, onSnapshot, getDoc } from "firebase/firestore";
+import { LogOut, Fuel, Save, Calculator, AlertCircle, Mic, Play, Square, Clock, Wallet, X, ArrowRightLeft, Check, User, Calendar as CalendarIcon, CreditCard, Truck, Camera, RotateCcw, Upload, CheckCircle, ChevronDown, RefreshCw } from "lucide-react";
+import Tesseract from 'tesseract.js';
+import Webcam from "react-webcam";
 import { useVoice } from "../../contexts/VoiceContext";
 import Calendar from "../../components/common/Calendar";
 
@@ -33,6 +35,18 @@ export default function StaffEntry() {
     const [shiftHistory, setShiftHistory] = useState([]); // Array of Date objects
     const [selectedDateShifts, setSelectedDateShifts] = useState([]);
     const [selectedDate, setSelectedDate] = useState(null);
+
+    // OCR State
+    const [ocrProcessing, setOcrProcessing] = useState(false);
+    const [showOcrModal, setShowOcrModal] = useState(false);
+    const [ocrResult, setOcrResult] = useState("");
+    const [ocrImage, setOcrImage] = useState(null);
+    const [ocrTargetNozzleId, setOcrTargetNozzleId] = useState(null);
+
+    // Camera State
+    const [showCamera, setShowCamera] = useState(false);
+    const webcamRef = useRef(null);
+    const [facingMode, setFacingMode] = useState("environment");
 
     // Forms
     const [startForm, setStartForm] = useState({
@@ -681,13 +695,138 @@ export default function StaffEntry() {
             setCustomers(customersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
 
         } catch (err) {
-            console.error("Error logging credit sale:", err);
-            setError(err.message || "Failed to log credit sale.");
         } finally {
             setSubmitting(false);
         }
     };
 
+    // OCR Handlers
+    const handleCameraTrigger = (nozzleId) => {
+        setOcrTargetNozzleId(nozzleId);
+        setShowCamera(true);
+    };
+
+    const handleCameraCapture = useCallback(() => {
+        const imageSrc = webcamRef.current.getScreenshot();
+        if (imageSrc) {
+            setOcrImage(imageSrc);
+            setShowCamera(false);
+            processOcr(imageSrc);
+        }
+    }, [webcamRef]);
+
+    // --- OCR Processing (Tesseract.js) ---
+    const processOcr = async (imageUrl) => {
+        setOcrProcessing(true);
+        setOcrResult("");
+        setShowOcrModal(true);
+
+        try {
+            const result = await Tesseract.recognize(
+                imageUrl,
+                'eng',
+                {
+                    logger: m => console.log(m)
+                }
+            );
+
+            const { text, lines: tesseractLines } = result.data;
+            console.log("OCR Raw Text:", text);
+
+            // Tesseract returns lines in its data structure or we can split text
+            const lines = tesseractLines && tesseractLines.length > 0
+                ? tesseractLines.map(l => l.text)
+                : text.split('\n');
+
+            console.log("Detected Lines:", lines);
+
+            // --- Sandwich Strategy (Adapted for Tesseract) ---
+            const extractCleanNumber = (str) => {
+                if (!str) return null;
+                // Remove non-numeric/dot/space chars
+                let cleaned = str.replace(/[^0-9.\s]/g, '').trim();
+                // Merge split digits (e.g. "1 234 . 56" -> "1234.56")
+                cleaned = cleaned.replace(/\s+/g, '');
+                const match = cleaned.match(/(\d+\.\d+)/);
+                return match ? match[1] : null;
+            };
+
+            const normalizedLines = lines.map(l => l.toLowerCase().replace(/[^a-z0-9]/g, ''));
+            let targetValue = null;
+
+            // Strategy 1: Bottom-Up Anchor ("CumSale")
+            // Find "CumSale" index
+            const saleIndex = normalizedLines.findIndex(l => l.includes("cumsale") || l.includes("cumbale") || (l.includes("sale") && l.length > 10));
+
+            if (saleIndex > 0) {
+                // Check line immediately above
+                const candidateLine = lines[saleIndex - 1];
+                console.log("Found Sale Anchor at index " + saleIndex + ". Checking line above:", candidateLine);
+                targetValue = extractCleanNumber(candidateLine);
+
+                // If not found, check 2 lines above (maybe a noise line in between?)
+                if (!targetValue && saleIndex - 2 >= 0) {
+                    targetValue = extractCleanNumber(lines[saleIndex - 2]);
+                }
+            }
+
+            // Strategy 2: Top-Down Anchor ("CumVolume" or "Total Volume")
+            if (!targetValue) {
+                const volIndex = normalizedLines.findIndex(l => l.includes("cumvol") || l.includes("totalvol"));
+                if (volIndex !== -1) {
+                    console.log("Found Volume Anchor at index " + volIndex);
+                    // Check SAME line (often "Cum Volume: 1234.56")
+                    targetValue = extractCleanNumber(lines[volIndex]);
+                    // Check NEXT line
+                    if (!targetValue && volIndex + 1 < lines.length) {
+                        targetValue = extractCleanNumber(lines[volIndex + 1]);
+                    }
+                }
+            }
+
+            if (targetValue) {
+                setOcrResult(targetValue);
+                // Auto-fill active field if available
+                // (Optional: Logic to auto-fill specific nozzle could go here)
+            } else {
+                setOcrResult("Could not auto-detect 'CumVolume'. Please enter manually.");
+            }
+
+        } catch (err) {
+            console.error("OCR Error:", err);
+            setOcrResult("Failed to scan image.");
+        } finally {
+            setOcrProcessing(false);
+        }
+    };
+
+
+
+    const confirmScanResult = () => {
+        if (ocrTargetNozzleId && ocrResult && ocrResult !== "Not Found" && ocrResult !== "Error") {
+            setEndForm(prev => ({
+                ...prev,
+                readings: {
+                    ...prev.readings,
+                    [ocrTargetNozzleId]: {
+                        ...prev.readings[ocrTargetNozzleId],
+                        endReading: ocrResult
+                    }
+                }
+            }));
+            setShowOcrModal(false);
+            setOcrImage(null);
+            setOcrResult("");
+            setSuccess("Reading updated from scan!");
+        }
+    };
+
+    const closeOcrModal = () => {
+        setShowOcrModal(false);
+        setOcrImage(null);
+        setOcrResult("");
+        setOcrTargetNozzleId(null);
+    };
 
     // Monthly Stats State
     const [showStatsModal, setShowStatsModal] = useState(false);
@@ -1050,7 +1189,7 @@ export default function StaffEntry() {
                                 <label className="block text-sm text-gray-400 mb-1">Cash to Handle (₹)</label>
                                 <input
                                     type="number"
-                                    required
+
                                     className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-primary-orange"
                                     value={startForm.cashToHandle}
                                     onChange={e => setStartForm({ ...startForm, cashToHandle: e.target.value })}
@@ -1177,7 +1316,17 @@ export default function StaffEntry() {
                                     <div key={nozzle.nozzleId} className="bg-gray-800/30 p-4 rounded-xl border border-gray-700">
                                         <h4 className="font-bold text-primary-orange mb-3 text-sm flex justify-between">
                                             {nozzle.nozzleName}
-                                            <span className="text-gray-500 font-normal">Start: {nozzle.startReading}</span>
+                                            <div className="flex items-center gap-2">
+                                                <span className="text-gray-500 font-normal">Start: {nozzle.startReading}</span>
+                                                <button
+                                                    onClick={() => handleCameraTrigger(nozzle.nozzleId)}
+                                                    className="bg-blue-600/20 text-blue-400 p-1.5 rounded-lg hover:bg-blue-600/30 transition-colors"
+                                                    title="Scan Receipt"
+                                                    type="button"
+                                                >
+                                                    <Camera size={16} />
+                                                </button>
+                                            </div>
                                         </h4>
                                         <div className="space-y-3">
                                             <div>
@@ -1233,7 +1382,7 @@ export default function StaffEntry() {
                                     <label className="block text-sm text-gray-400 mb-1">Cash Returned</label>
                                     <input
                                         type="number"
-                                        required
+
                                         className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-primary-orange"
                                         value={endForm.cashReturned}
                                         onChange={e => setEndForm({ ...endForm, cashReturned: e.target.value })}
@@ -1243,7 +1392,7 @@ export default function StaffEntry() {
                                     <label className="block text-sm text-gray-400 mb-1">Cash Remaining</label>
                                     <input
                                         type="number"
-                                        required
+
                                         className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-primary-orange"
                                         value={endForm.cashRemaining}
                                         onChange={e => setEndForm({ ...endForm, cashRemaining: e.target.value })}
@@ -1286,7 +1435,7 @@ export default function StaffEntry() {
                                     <label className="block text-sm text-gray-400 mb-1">Expenses (Tea/Misc)</label>
                                     <input
                                         type="number"
-                                        required
+
                                         value={endForm.expenses}
                                         onChange={e => setEndForm({ ...endForm, expenses: e.target.value })}
                                         className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-primary-orange"
@@ -1297,7 +1446,7 @@ export default function StaffEntry() {
                                     <label className="block text-sm text-gray-400 mb-1">Change Given / Float</label>
                                     <input
                                         type="number"
-                                        required
+
                                         value={endForm.change}
                                         onChange={e => setEndForm({ ...endForm, change: e.target.value })}
                                         className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-primary-orange"
@@ -1353,6 +1502,97 @@ export default function StaffEntry() {
                                 {submitting ? "Sending..." : "Send Cash"}
                             </button>
                         </form>
+                    </div>
+                </div>
+            )}
+            {/* OCR Confirmation Modal */}
+            {showOcrModal && (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/90 backdrop-blur-sm p-4">
+                    <div className="bg-card-bg w-full max-w-sm rounded-xl border border-gray-800 shadow-2xl animate-scale-in">
+                        <div className="p-4 border-b border-gray-800 flex justify-between items-center">
+                            <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                                <Camera size={20} className="text-blue-500" /> Confirm Scan
+                            </h3>
+                            <button onClick={closeOcrModal} className="text-gray-400 hover:text-white"><X size={20} /></button>
+                        </div>
+                        <div className="p-4 space-y-4">
+                            {ocrImage && (
+                                <div className="rounded-lg overflow-hidden border border-gray-700 max-h-60">
+                                    <img src={ocrImage} alt="Receipt Scan" className="w-full object-contain" />
+                                </div>
+                            )}
+
+                            <div className="text-center">
+                                {ocrProcessing ? (
+                                    <div className="py-4">
+                                        <div className="animate-spin w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full mx-auto mb-2"></div>
+                                        <p className="text-blue-400 animate-pulse">Scanning Receipt...</p>
+                                    </div>
+                                ) : (
+                                    <div className="bg-gray-800/50 p-4 rounded-xl border border-gray-700">
+                                        <p className="text-gray-400 text-xs mb-1">Detected CumVolume</p>
+                                        <div className="text-3xl font-mono font-bold text-white mb-2">
+                                            {ocrResult === "Not Found" ? "--" : ocrResult}
+                                        </div>
+                                        {ocrResult === "Not Found" ? (
+                                            <p className="text-red-400 text-xs">Could not automatically detect. Please enter manually.</p>
+                                        ) : (
+                                            <div className="flex gap-2">
+                                                <button
+                                                    onClick={confirmScanResult}
+                                                    className="flex-1 bg-green-600 text-white py-2 rounded-lg font-bold hover:bg-green-700 flex items-center justify-center gap-2"
+                                                >
+                                                    <Check size={18} /> Confirm
+                                                </button>
+                                                <button
+                                                    onClick={() => setOcrResult("Not Found")} // Hack to allow retry or just close
+                                                    className="px-3 bg-gray-700 text-white rounded-lg hover:bg-gray-600"
+                                                >
+                                                    Retry
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {/* Camera Modal */}
+            {showCamera && (
+                <div className="fixed inset-0 z-[70] bg-black flex flex-col">
+                    <div className="flex justify-between items-center p-4 bg-black/50 absolute top-0 w-full z-10">
+                        <h3 className="text-white font-bold">Scan Receipt</h3>
+                        <button onClick={() => setShowCamera(false)} className="text-white bg-black/50 p-2 rounded-full"><X size={24} /></button>
+                    </div>
+                    <div className="flex-1 flex items-center justify-center bg-black relative">
+                        <Webcam
+                            audio={false}
+                            ref={webcamRef}
+                            screenshotFormat="image/jpeg"
+                            videoConstraints={{ facingMode }}
+                            className="w-full h-full object-cover"
+                        />
+                        {/* Scan Guide Overlay */}
+                        <div className="absolute inset-0 border-2 border-primary-orange/50 pointer-events-none m-8 rounded-lg flex items-center justify-center">
+                            <p className="text-primary-orange/80 text-sm bg-black/60 px-2 py-1 rounded">Align 'CumVolume' here</p>
+                        </div>
+                    </div>
+                    <div className="p-6 bg-black flex justify-around items-center">
+                        <button
+                            onClick={() => setFacingMode(prev => prev === "user" ? "environment" : "user")}
+                            className="bg-gray-800 text-white p-3 rounded-full"
+                        >
+                            <RotateCcw size={24} />
+                        </button>
+                        <button
+                            onClick={handleCameraCapture}
+                            className="bg-white rounded-full w-16 h-16 border-4 border-gray-300 flex items-center justify-center"
+                        >
+                            <div className="w-12 h-12 bg-primary-orange rounded-full"></div>
+                        </button>
+                        <div className="w-12"></div> {/* Spacer */}
                     </div>
                 </div>
             )}

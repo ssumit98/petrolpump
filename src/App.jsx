@@ -95,7 +95,7 @@ function App() {
             {/* Catch all */}
             <Route path="*" element={<Navigate to="/login" replace />} />
           </Routes>
-          <VoiceAssistant />
+          {/* <VoiceAssistant /> */}
         </VoiceProvider>
       </AuthProvider>
     </Router>

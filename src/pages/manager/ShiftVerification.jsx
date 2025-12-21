@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { db } from "../../firebase";
-import { collection, getDocs, getDoc, doc, updateDoc, query, where, onSnapshot, orderBy, runTransaction, serverTimestamp, addDoc } from "firebase/firestore";
+import { collection, getDocs, getDoc, doc, updateDoc, query, where, onSnapshot, orderBy, runTransaction, serverTimestamp, addDoc, Timestamp } from "firebase/firestore";
 import { CheckSquare, User, Clock, Wallet, AlertCircle, CheckCircle, Fuel, X, Edit, Play, Square } from "lucide-react";
 
 export default function ShiftVerification() {
@@ -20,6 +20,18 @@ export default function ShiftVerification() {
     const [editForm, setEditForm] = useState({});
     const [processing, setProcessing] = useState(false);
     const [showManagerEndModal, setShowManagerEndModal] = useState(false); // New Modal for Manager
+
+    // Manager Start Job State
+    const [nozzles, setNozzles] = useState([]);
+    const [showManagerStartModal, setShowManagerStartModal] = useState(false);
+    const [selectedAttendant, setSelectedAttendant] = useState(null);
+    const [startJobForm, setStartJobForm] = useState({
+        date: new Date().toISOString().split('T')[0],
+        time: new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
+        selectedNozzleIds: [],
+        cashToHandle: "",
+        readings: {} // nozzleId: startReading
+    });
 
     // 1. Fetch Attendants
     useEffect(() => {
@@ -79,6 +91,16 @@ export default function ShiftVerification() {
             }
         };
         fetchPrices();
+    }, []);
+
+    // 6. Fetch Nozzles for Manager Start
+    useEffect(() => {
+        const fetchNozzles = async () => {
+            const q = query(collection(db, "nozzles"), orderBy("nozzleName"));
+            const snapshot = await getDocs(q);
+            setNozzles(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+        };
+        fetchNozzles();
     }, []);
 
     // Open Start Modal
@@ -142,6 +164,20 @@ export default function ShiftVerification() {
             change: ""
         });
         setShowManagerEndModal(true);
+    };
+
+    // Open Manager Start Modal
+    const openManagerStartModal = (attendant) => {
+        setSelectedAttendant(attendant);
+        const now = new Date();
+        setStartJobForm({
+            date: now.toISOString().split('T')[0],
+            time: now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
+            selectedNozzleIds: [],
+            cashToHandle: "",
+            readings: {}
+        });
+        setShowManagerStartModal(true);
     };
 
     // Handle Approve Start
@@ -554,6 +590,91 @@ export default function ShiftVerification() {
         }
     };
 
+    // Handle Manager Start Job (Backdated)
+    const handleManagerStartJob = async (e) => {
+        e.preventDefault();
+        setProcessing(true);
+        setError("");
+
+        try {
+            if (startJobForm.selectedNozzleIds.length === 0) {
+                throw new Error("Please select at least one nozzle");
+            }
+
+            const selectedNozzles = nozzles.filter(n => startJobForm.selectedNozzleIds.includes(n.id));
+            const cashToHandle = parseFloat(startJobForm.cashToHandle) || 0;
+
+            // Construct Timestamp logic
+            const startDateTime = new Date(`${startJobForm.date}T${startJobForm.time}`);
+            if (isNaN(startDateTime.getTime())) throw new Error("Invalid date/time");
+            const startTimestamp = Timestamp.fromDate(startDateTime);
+
+            await runTransaction(db, async (transaction) => {
+                // 1. Get current user data 
+                const userRef = doc(db, "users", selectedAttendant.id);
+                const userDoc = await transaction.get(userRef);
+                if (!userDoc.exists()) throw new Error("User not found");
+
+                const currentDbCash = userDoc.data().cashInHand || 0;
+                const newCash = currentDbCash + cashToHandle;
+
+                // 2. Create Shift Log
+                const shiftRef = doc(collection(db, "shift_logs"));
+
+                // Construct nozzles array for the shift
+                const shiftNozzles = selectedNozzles.map(n => {
+                    // Use manual start reading if provided, otherwise default to current
+                    const manualStart = parseFloat(startJobForm.readings[n.id]);
+                    const startReading = !isNaN(manualStart) ? manualStart : n.currentMeterReading;
+
+                    return {
+                        nozzleId: n.id,
+                        nozzleName: n.nozzleName,
+                        fuelType: n.fuelType,
+                        startReading: startReading,
+                        endReading: startReading, // Init
+                        totalLitres: 0,
+                        testingLitres: 0
+                    };
+                });
+
+                const primaryNozzle = shiftNozzles[0];
+
+                transaction.set(shiftRef, {
+                    attendantId: selectedAttendant.id,
+                    attendantName: selectedAttendant.email,
+                    startTime: startTimestamp, // Custom Timestamp
+
+                    // Legacy/Summary fields
+                    nozzleId: primaryNozzle.nozzleId,
+                    nozzleName: shiftNozzles.map(n => n.nozzleName).join(", "),
+                    fuelType: shiftNozzles.length > 1 ? "Mixed" : primaryNozzle.fuelType,
+                    startReading: primaryNozzle.startReading,
+
+                    // New Data Structure
+                    nozzles: shiftNozzles,
+
+                    cashToHandle: cashToHandle,
+                    previousCashInHand: currentDbCash,
+                    status: "Active",
+                    startVerified: true, // Auto-verified by manager
+                    verifiedAt: serverTimestamp() // Verification happened now
+                });
+
+                // 3. Update User Cash in Hand
+                transaction.update(userRef, { cashInHand: newCash });
+            });
+
+            setSuccess("Backdated Job STARTED successfully!");
+            setShowManagerStartModal(false);
+        } catch (err) {
+            console.error("Error starting job:", err);
+            setError(err.message || "Failed to start job.");
+        } finally {
+            setProcessing(false);
+        }
+    };
+
 
     if (loading) return <div className="text-white p-4">Loading data...</div>;
 
@@ -713,7 +834,14 @@ export default function ShiftVerification() {
                                     </button>
                                 </div>
                             ) : (
-                                <div className="text-xs text-gray-600 italic">Idle</div>
+                                <div className="text-xs text-gray-600 italic">
+                                    <button
+                                        onClick={() => openManagerStartModal(attendant)}
+                                        className="w-full py-2 bg-green-600/10 text-green-500 hover:bg-green-600 hover:text-white border border-green-600/50 rounded-lg text-xs font-bold transition-colors flex items-center justify-center gap-2"
+                                    >
+                                        <Play size={14} /> Start Job
+                                    </button>
+                                </div>
                             )}
                         </div>
                     );
@@ -754,7 +882,7 @@ export default function ShiftVerification() {
                                 <label className="block text-sm text-gray-400 mb-1">Cash to Handle (₹)</label>
                                 <input
                                     type="number"
-                                    required
+
                                     value={editForm.cashToHandle}
                                     onChange={e => setEditForm({ ...editForm, cashToHandle: e.target.value })}
                                     className="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white"
@@ -831,7 +959,7 @@ export default function ShiftVerification() {
                                     <label className="block text-sm text-gray-400 mb-1">Cash Returned</label>
                                     <input
                                         type="number"
-                                        required
+
                                         value={editForm.cashReturned}
                                         onChange={e => setEditForm({ ...editForm, cashReturned: e.target.value })}
                                         className="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white"
@@ -863,17 +991,17 @@ export default function ShiftVerification() {
                                     <label className="block text-sm text-gray-400 mb-1">Expenses</label>
                                     <input
                                         type="number"
-                                        required
+
                                         value={editForm.expenses}
                                         onChange={e => setEditForm({ ...editForm, expenses: e.target.value })}
                                         className="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white"
                                     />
                                 </div>
                                 <div>
-                                    <label className="block text-sm text-gray-400 mb-1">Change/Float</label>
+                                    <label className="block text-sm text-gray-400 mb-1">Change/Coins</label>
                                     <input
                                         type="number"
-                                        required
+
                                         value={editForm.change}
                                         onChange={e => setEditForm({ ...editForm, change: e.target.value })}
                                         className="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white"
@@ -957,7 +1085,7 @@ export default function ShiftVerification() {
                                     <label className="block text-sm text-gray-400 mb-1">Cash Returned</label>
                                     <input
                                         type="number"
-                                        required
+
                                         value={editForm.cashReturned}
                                         onChange={e => setEditForm({ ...editForm, cashReturned: e.target.value })}
                                         className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-primary-orange"
@@ -967,7 +1095,7 @@ export default function ShiftVerification() {
                                     <label className="block text-sm text-gray-400 mb-1">Paytm</label>
                                     <input
                                         type="number"
-                                        required
+
                                         value={editForm.paytm}
                                         onChange={e => setEditForm({ ...editForm, paytm: e.target.value })}
                                         className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-primary-orange"
@@ -980,7 +1108,7 @@ export default function ShiftVerification() {
                                     <label className="block text-sm text-gray-400 mb-1">PhonePe</label>
                                     <input
                                         type="number"
-                                        required
+
                                         value={editForm.phonePe}
                                         onChange={e => setEditForm({ ...editForm, phonePe: e.target.value })}
                                         className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-primary-orange"
@@ -990,7 +1118,7 @@ export default function ShiftVerification() {
                                     <label className="block text-sm text-gray-400 mb-1">Expenses</label>
                                     <input
                                         type="number"
-                                        required
+
                                         value={editForm.expenses}
                                         onChange={e => setEditForm({ ...editForm, expenses: e.target.value })}
                                         className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-primary-orange"
@@ -1000,7 +1128,7 @@ export default function ShiftVerification() {
                                     <label className="block text-sm text-gray-400 mb-1">Change/Float</label>
                                     <input
                                         type="number"
-                                        required
+
                                         value={editForm.change}
                                         onChange={e => setEditForm({ ...editForm, change: e.target.value })}
                                         className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-primary-orange"
@@ -1010,6 +1138,114 @@ export default function ShiftVerification() {
 
                             <button disabled={processing} className="w-full py-3 bg-red-600 text-white rounded-lg font-bold hover:bg-red-700 shadow-lg mt-4">
                                 {processing ? "Processing..." : "End Shift & Update Data"}
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+            {/* Manager Start Modal */}
+            {showManagerStartModal && selectedAttendant && (
+                <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+                    <div className="bg-card-bg rounded-xl w-full max-w-md border border-gray-800 shadow-2xl">
+                        <div className="p-4 border-b border-gray-800 flex justify-between items-center">
+                            <h3 className="text-lg font-bold text-white">Start Job for {selectedAttendant.email?.split('@')[0]}</h3>
+                            <button onClick={() => setShowManagerStartModal(false)} className="text-gray-400 hover:text-white"><X size={20} /></button>
+                        </div>
+                        <form onSubmit={handleManagerStartJob} className="p-4 space-y-4">
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-xs text-gray-400 mb-1">Date</label>
+                                    <input
+                                        type="date"
+                                        required
+                                        className="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white text-sm"
+                                        value={startJobForm.date}
+                                        onChange={e => setStartJobForm({ ...startJobForm, date: e.target.value })}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs text-gray-400 mb-1">Time</label>
+                                    <input
+                                        type="time"
+
+                                        className="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white text-sm"
+                                        value={startJobForm.time}
+                                        onChange={e => setStartJobForm({ ...startJobForm, time: e.target.value })}
+                                    />
+                                </div>
+                            </div>
+
+                            <div>
+                                <label className="block text-sm text-gray-400 mb-2">Select Nozzles</label>
+                                <div className="max-h-40 overflow-y-auto space-y-2 border border-gray-700 rounded p-2">
+                                    {nozzles.map(n => (
+                                        <label key={n.id} className="flex items-center gap-2 text-sm text-gray-300 hover:bg-gray-800 p-1 rounded cursor-pointer">
+                                            <input
+                                                type="checkbox"
+                                                checked={startJobForm.selectedNozzleIds.includes(n.id)}
+                                                onChange={e => {
+                                                    if (e.target.checked) {
+                                                        setStartJobForm(prev => ({
+                                                            ...prev,
+                                                            selectedNozzleIds: [...prev.selectedNozzleIds, n.id],
+                                                            readings: { ...prev.readings, [n.id]: n.currentMeterReading }
+                                                        }));
+                                                    } else {
+                                                        setStartJobForm(prev => ({
+                                                            ...prev,
+                                                            selectedNozzleIds: prev.selectedNozzleIds.filter(id => id !== n.id)
+                                                        }));
+                                                    }
+                                                }}
+                                                className="rounded border-gray-600 bg-gray-800 text-primary-orange"
+                                            />
+                                            <span className="flex-1">{n.nozzleName} ({n.fuelType})</span>
+                                            <span className="font-mono text-xs text-gray-500">{n.currentMeterReading}</span>
+                                        </label>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {/* Start Readings for Selected */}
+                            {startJobForm.selectedNozzleIds.length > 0 && (
+                                <div className="space-y-2">
+                                    <label className="block text-xs text-gray-400">Start Readings</label>
+                                    {startJobForm.selectedNozzleIds.map(id => {
+                                        const n = nozzles.find(nozzle => nozzle.id === id);
+                                        return (
+                                            <div key={id} className="flex gap-2 items-center">
+                                                <span className="text-xs text-gray-300 w-1/3 truncate">{n?.nozzleName}</span>
+                                                <input
+                                                    type="number"
+                                                    step="0.01"
+                                                    required
+                                                    value={startJobForm.readings[id] || ""}
+                                                    onChange={e => setStartJobForm(prev => ({
+                                                        ...prev,
+                                                        readings: { ...prev.readings, [id]: e.target.value }
+                                                    }))}
+                                                    className="flex-1 bg-gray-900 border border-gray-700 rounded p-1 text-white text-sm font-mono"
+                                                />
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
+
+                            <div>
+                                <label className="block text-sm text-gray-400 mb-1">Cash to Handle (₹)</label>
+                                <input
+                                    type="number"
+
+                                    value={startJobForm.cashToHandle}
+                                    onChange={e => setStartJobForm({ ...startJobForm, cashToHandle: e.target.value })}
+                                    className="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white"
+                                />
+                            </div>
+
+                            <button disabled={processing} className="w-full py-2 bg-green-600 text-white rounded font-bold hover:bg-green-700">
+                                {processing ? "Start Job (Backdated)" : "Confirm Start"}
                             </button>
                         </form>
                     </div>
