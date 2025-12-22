@@ -64,7 +64,8 @@ export default function StaffEntry() {
         paytm: "",
         phonePe: "",
         expenses: "", // Separate from change
-        change: ""
+        change: "",
+        credit: "" // Added credit
     });
 
     const [lendForm, setLendForm] = useState({
@@ -350,6 +351,7 @@ export default function StaffEntry() {
                     phonePe: parseFloat(endForm.phonePe) || 0,
                     expenses: parseFloat(endForm.expenses) || 0,
                     change: parseFloat(endForm.change) || 0,
+                    credit: parseFloat(endForm.credit) || 0, // Added Credit
                     status: "PendingEndVerification"
                 });
 
@@ -408,7 +410,9 @@ export default function StaffEntry() {
 
             setSuccess("Job ended. Sent for verification.");
             setShowEndModal(false);
-            setEndForm({ readings: {}, cashReturned: "", cashRemaining: "", paytm: "", phonePe: "", expenses: "", change: "" });
+            setSuccess("Job ended. Sent for verification.");
+            setShowEndModal(false);
+            setEndForm({ readings: {}, cashReturned: "", cashRemaining: "", paytm: "", phonePe: "", expenses: "", change: "", credit: "" });
         } catch (err) {
             console.error("Error ending job:", err);
             setError(err.message || "Failed to end job.");
@@ -1442,7 +1446,7 @@ export default function StaffEntry() {
                                     />
                                 </div>
                                 <div>
-                                    <label className="block text-sm text-gray-400 mb-1">Cash Remaining</label>
+                                    <label className="block text-sm text-gray-400 mb-1">Short / Change</label>
                                     <input
                                         type="number"
 

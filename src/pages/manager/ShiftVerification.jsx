@@ -139,7 +139,11 @@ export default function ShiftVerification() {
             paytm: shift.paytm || 0,
             phonePe: shift.phonePe || 0,
             expenses: shift.expenses || 0,
-            change: shift.change
+            paytm: shift.paytm || 0,
+            phonePe: shift.phonePe || 0,
+            expenses: shift.expenses || 0,
+            change: shift.change,
+            credit: shift.credit || 0 // Initialize credit
         });
         setShowEndModal(true);
     };
@@ -161,7 +165,10 @@ export default function ShiftVerification() {
             paytm: "",
             phonePe: "",
             expenses: "",
-            change: ""
+            phonePe: "",
+            expenses: "",
+            change: "",
+            credit: "" // Initialize credit
         });
         setShowManagerEndModal(true);
     };
@@ -298,6 +305,8 @@ export default function ShiftVerification() {
             const expenses = parseFloat(editForm.expenses) || 0;
             const change = parseFloat(editForm.change) || 0;
 
+            const credit = parseFloat(editForm.credit) || 0;
+
             // Fetch Prices
             const pricesSnapshot = await getDocs(collection(db, "prices"));
             const pricesMap = {};
@@ -309,8 +318,8 @@ export default function ShiftVerification() {
                 expectedAmount += (n.netLitres * price);
             });
 
-            // Total Deposited now includes separated payments + expenses (as it's money accounted for)
-            const totalDeposited = cashReturned + paytm + phonePe + expenses + change;
+            // Total Deposited now includes separated payments + expenses + credit (as it's money accounted for)
+            const totalDeposited = cashReturned + paytm + phonePe + expenses + change + credit;
             const shortage = expectedAmount - totalDeposited;
 
             // Fetch Tanks
@@ -352,7 +361,7 @@ export default function ShiftVerification() {
                     totalLitres: updatedNozzles.length === 1 ? updatedNozzles[0].totalLitres : 0, // Keep legacy field for single nozzle
 
                     cashReturned, cashRemaining, change,
-                    paytm, phonePe, expenses, // Save broken down fields
+                    paytm, phonePe, expenses, credit, // Save broken down fields, including Credit
                     cashOnline: (paytm + phonePe) // Keep legacy agg for display if needed
                 });
 
@@ -402,6 +411,53 @@ export default function ShiftVerification() {
                         const { ref, data } = tankMap[tank.fuelType];
                         transaction.update(ref, {
                             currentLevel: (data.currentLevel || 0) - litreSum
+                        });
+                    }
+                }
+
+                // 7. WRITE: Update Daily Sheets with CREDIT (if any)
+                // 'today' is already declared above
+                const sheetRef = doc(db, "daily_sheets", today);
+                const creditAmount = parseFloat(editForm.credit) || 0;
+
+                if (creditAmount > 0) {
+                    const sheetDoc = await transaction.get(sheetRef);
+                    if (sheetDoc.exists()) {
+                        const sheetData = sheetDoc.data();
+                        const existingPayments = sheetData.payments || [];
+
+                        const newPayment = {
+                            type: "Credit",
+                            amount: creditAmount,
+                            notes: `Unknown Credit - ${selectedShift.attendantName?.split('@')[0]}`,
+                            timestamp: new Date().toISOString()
+                        };
+
+                        const newPayments = [...existingPayments, newPayment];
+                        const totalPayment = newPayments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
+                        const netCollection = totalPayment - (sheetData.totalExpense || 0);
+
+                        transaction.update(sheetRef, {
+                            payments: newPayments,
+                            totalPayment,
+                            netCollection,
+                            updatedAt: serverTimestamp()
+                        });
+                    } else {
+                        transaction.set(sheetRef, {
+                            date: today,
+                            status: "Open",
+                            payments: [{
+                                type: "Credit",
+                                amount: creditAmount,
+                                notes: `Unknown Credit - ${selectedShift.attendantName?.split('@')[0]}`,
+                                timestamp: new Date().toISOString()
+                            }],
+                            expenses: [],
+                            totalPayment: creditAmount,
+                            totalExpense: 0,
+                            netCollection: creditAmount,
+                            createdAt: serverTimestamp()
                         });
                     }
                 }
@@ -481,7 +537,7 @@ export default function ShiftVerification() {
                 expectedAmount += (n.netLitres * price);
             });
 
-            const totalDeposited = cashReturned + paytm + phonePe + expenses + change;
+            const totalDeposited = cashReturned + paytm + phonePe + expenses + change + credit;
             const shortage = expectedAmount - totalDeposited;
 
             // Fetch Tanks
@@ -524,7 +580,7 @@ export default function ShiftVerification() {
                     totalLitres: updatedNozzles.length === 1 ? updatedNozzles[0].totalLitres : 0,
                     cashReturned,
                     paytm, phonePe, expenses,
-                    change,
+                    change, credit,
                     cashOnline: (paytm + phonePe),
                     cashRemaining: (selectedShift.cashToHandle || 0) - shortage
                 });

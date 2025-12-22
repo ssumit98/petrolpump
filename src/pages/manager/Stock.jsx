@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { db } from "../../firebase";
-import { collection, getDocs, doc, updateDoc, query, where, serverTimestamp } from "firebase/firestore";
+import { collection, getDocs, doc, updateDoc, query, where, serverTimestamp, orderBy, limit } from "firebase/firestore";
 import { Droplets, AlertTriangle, CheckCircle, History, Save } from "lucide-react";
 
 export default function ManagerStock() {
@@ -16,21 +16,41 @@ export default function ManagerStock() {
     const [success, setSuccess] = useState("");
     const [error, setError] = useState("");
 
-    // Fetch Tanks
+    const [nozzles, setNozzles] = useState([]);
+    const [activeShifts, setActiveShifts] = useState([]);
+    const [shiftHistory, setShiftHistory] = useState([]);
+
+    // Fetch Tanks & Nozzles & Shifts
     useEffect(() => {
-        async function fetchTanks() {
+        async function fetchData() {
             try {
-                const snapshot = await getDocs(collection(db, "tanks"));
-                const tankList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                setTanks(tankList);
+                // 1. Tanks
+                const tanksSnapshot = await getDocs(collection(db, "tanks"));
+                setTanks(tanksSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+
+                // 2. Nozzles
+                const nozzlesSnapshot = await getDocs(collection(db, "nozzles"));
+                setNozzles(nozzlesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+
+                // 3. Active Shifts
+                const activeQuery = query(collection(db, "shift_logs"), where("status", "==", "Active"));
+                const activeSnapshot = await getDocs(activeQuery);
+                setActiveShifts(activeSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+
+                // 4. Recent History (for "Last Worked")
+                // Fetch enough to cover all nozzles recently.
+                const historyQuery = query(collection(db, "shift_logs"), orderBy("endTime", "desc"), limit(50));
+                const historySnapshot = await getDocs(historyQuery);
+                setShiftHistory(historySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+
             } catch (err) {
-                console.error("Error fetching tanks:", err);
-                setError("Failed to load tanks.");
+                console.error("Error fetching data:", err);
+                setError("Failed to load data.");
             } finally {
                 setLoading(false);
             }
         }
-        fetchTanks();
+        fetchData();
     }, []);
 
     // Calculate Book Stock when tank is selected
@@ -193,6 +213,100 @@ export default function ManagerStock() {
                     </form>
                 </div>
             )}
+            {/* Nozzle Monitoring Section */}
+            <div className="bg-card-bg p-4 rounded-xl border border-gray-800 mt-8">
+                <h2 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
+                    <Droplets size={20} className="text-blue-400" /> Nozzle Overview
+                </h2>
+                <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse">
+                        <thead>
+                            <tr className="text-gray-400 border-b border-gray-700">
+                                <th className="p-3">Nozzle</th>
+                                <th className="p-3">Reading</th>
+                                <th className="p-3">Status</th>
+                                <th className="p-3">Operator / Time</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-800">
+                            {nozzles.map(nozzle => {
+                                // Find if this nozzle is in an active shift
+                                const activeShift = activeShifts.find(s => {
+                                    if (s.nozzleId === nozzle.id) return true;
+                                    if (s.nozzles && s.nozzles.some(n => n.nozzleId === nozzle.id)) return true;
+                                    return false;
+                                });
+
+                                // Find last history if not active
+                                let lastShift = null;
+                                if (!activeShift) {
+                                    lastShift = shiftHistory.find(s => {
+                                        if (s.nozzleId === nozzle.id) return true;
+                                        if (s.nozzles && s.nozzles.some(n => n.nozzleId === nozzle.id)) return true;
+                                        return false;
+                                    });
+                                }
+
+                                return (
+                                    <tr key={nozzle.id} className="hover:bg-gray-900/50">
+                                        <td className="p-3 text-white font-medium">
+                                            {nozzle.nozzleName}
+                                            <span className="block text-xs text-gray-500">{nozzle.fuelType}</span>
+                                        </td>
+                                        <td className="p-3 text-mono text-xl font-bold text-primary-orange">
+                                            {nozzle.currentMeterReading?.toLocaleString() ?? "0"}
+                                        </td>
+                                        <td className="p-3">
+                                            {activeShift ? (
+                                                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-green-500/10 text-green-500 border border-green-500/20">
+                                                    <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
+                                                    Running
+                                                </span>
+                                            ) : (
+                                                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-gray-500/10 text-gray-500 border border-gray-500/20">
+                                                    Idle
+                                                </span>
+                                            )}
+                                        </td>
+                                        <td className="p-3 text-white">
+                                            {activeShift ? (
+                                                <div className="flex flex-col">
+                                                    <div className="flex items-center gap-2 mb-1">
+                                                        <div className="w-5 h-5 rounded-full bg-blue-500/20 flex items-center justify-center text-[10px] text-blue-400 font-bold border border-blue-500/30">
+                                                            {activeShift.attendantName?.charAt(0).toUpperCase()}
+                                                        </div>
+                                                        <span className="text-sm font-medium">{activeShift.attendantName?.split('@')[0]}</span>
+                                                    </div>
+                                                    <span className="text-xs text-green-400">
+                                                        Started: {activeShift.startTime?.toDate ? activeShift.startTime.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Just now'}
+                                                    </span>
+                                                </div>
+                                            ) : lastShift ? (
+                                                <div className="flex flex-col opacity-75">
+                                                    <div className="flex items-center gap-2 mb-1">
+                                                        <History size={12} className="text-gray-500" />
+                                                        <span className="text-sm text-gray-300">{lastShift.attendantName?.split('@')[0]}</span>
+                                                    </div>
+                                                    <span className="text-xs text-gray-500">
+                                                        Ended: {lastShift.endTime?.toDate ? lastShift.endTime.toDate().toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '--'}
+                                                    </span>
+                                                </div>
+                                            ) : (
+                                                <span className="text-gray-600 text-xs italic">No recent history</span>
+                                            )}
+                                        </td>
+                                    </tr>
+                                );
+                            })}
+                            {nozzles.length === 0 && (
+                                <tr>
+                                    <td colSpan="4" className="p-4 text-center text-gray-500">No nozzles found.</td>
+                                </tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </div>
     );
 }
